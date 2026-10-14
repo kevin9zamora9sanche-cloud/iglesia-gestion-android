@@ -35,16 +35,21 @@ data class ChurchActivity(
     val kind: String = "Actividad",
     val taskStatus: String? = null,
     val isAssignedToCurrentUser: Boolean = false,
+    val parentActivityTitle: String? = null,
+    val priority: String? = null,
+    val isLegacyTask: Boolean = false,
 )
 
 data class ChurchProject(
     val name: String,
+    val objective: String,
     val description: String,
-    val ministryId: String?,
     val leaderId: String,
     val dueInDays: Int,
     val progress: Int,
-    val budget: Long? = null,
+    val status: String,
+    val budgetEstimated: Long? = null,
+    val budgetExecuted: Long? = null,
     val id: String = name,
 )
 
@@ -67,12 +72,13 @@ data class ChurchNotification(
 
 data class ProjectDraft(
     val name: String,
+    val objective: String,
     val description: String,
-    val ministryId: String?,
     val leaderId: String,
     val startDate: String,
     val dueDate: String,
-    val budget: Long?,
+    val budgetEstimated: Long?,
+    val budgetExecuted: Long?,
 )
 
 data class ActivityDraft(
@@ -84,8 +90,16 @@ data class ActivityDraft(
     val ministryId: String?,
     val location: String,
     val kind: String,
-    val priority: String?,
     val assigneeIds: List<String>,
+)
+
+data class TaskDraft(
+    val activityId: String,
+    val title: String,
+    val instructions: String,
+    val assigneeId: String,
+    val dueAt: String?,
+    val priority: String,
 )
 
 data class WorshipSongDraft(
@@ -124,8 +138,25 @@ object ChurchData {
     )
 
     val projects = listOf(
-        ChurchProject("Mejora de instalaciones", "Revisión, mantenimiento y preparación de los espacios de la iglesia.", "aseo", "u4", 30, 55, 450000),
-        ChurchProject("Encuentro anual de jóvenes", "Planificación integral del próximo encuentro de formación y convivencia.", "juventud", "u3", 60, 20),
+        ChurchProject(
+            name = "Mejora de instalaciones",
+            objective = "Mejorar los espacios para las actividades de toda la iglesia.",
+            description = "Revisión, mantenimiento y preparación de los espacios de la iglesia.",
+            leaderId = "u4",
+            dueInDays = 30,
+            progress = 55,
+            status = "En curso",
+            budgetEstimated = 450000,
+        ),
+        ChurchProject(
+            name = "Encuentro anual de jóvenes",
+            objective = "Fortalecer la formación y convivencia de la congregación.",
+            description = "Planificación integral del próximo encuentro de formación y convivencia.",
+            leaderId = "u3",
+            dueInDays = 60,
+            progress = 20,
+            status = "Por hacer",
+        ),
     )
 
     val songs = listOf(

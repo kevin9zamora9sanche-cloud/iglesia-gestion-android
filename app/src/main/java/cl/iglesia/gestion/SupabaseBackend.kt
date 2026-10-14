@@ -17,6 +17,7 @@ import kotlinx.serialization.json.put
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.time.LocalDate
+import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 
@@ -124,15 +125,17 @@ object SupabaseBackend {
             .map { project ->
                 ChurchProject(
                     name = project.name,
+                    objective = project.objective,
                     description = project.description,
-                    ministryId = project.ministryId,
                     leaderId = project.leaderId,
                     dueInDays = ChronoUnit.DAYS.between(
                         LocalDate.now(),
                         LocalDate.parse(project.dueDate),
                     ).coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt(),
                     progress = project.progress,
-                    budget = project.budget?.toLong(),
+                    status = project.status.toProjectStatusLabel(),
+                    budgetEstimated = project.budget?.toLong(),
+                    budgetExecuted = project.budgetExecuted?.toLong(),
                     id = project.id,
                 )
             }
@@ -149,6 +152,32 @@ object SupabaseBackend {
             .mapTo(mutableSetOf(), SupabaseActivityAssignment::activityId)
         val churchActivities = activities.map {
             it.toChurchActivity(it.id in assignedActivityIds)
+        }
+        val tasks = client.from("tasks")
+            .select()
+            .decodeList<SupabaseTask>()
+        val activityById = activities.associateBy(SupabaseActivity::id)
+        val churchTasks = tasks.map { task ->
+            val parentActivity = checkNotNull(activityById[task.activityId]) {
+                "No se encontró la actividad asociada a la tarea ${task.id}."
+            }
+            val dueAt = task.dueAt?.let(OffsetDateTime::parse)
+            ChurchActivity(
+                id = task.id,
+                title = task.title,
+                description = task.instructions,
+                date = dueAt?.toLocalDate() ?: LocalDate.parse(parentActivity.activityDate),
+                time = dueAt?.toLocalTime()?.toString()?.take(5) ?: parentActivity.startTime.take(5),
+                endTime = dueAt?.toLocalTime()?.toString()?.take(5) ?: parentActivity.endTime.take(5),
+                ministryId = parentActivity.ministryId,
+                location = parentActivity.location,
+                status = task.status.toTaskStateLabel(),
+                kind = "Tarea",
+                taskStatus = task.status,
+                isAssignedToCurrentUser = task.assigneeId == currentMember.id,
+                parentActivityTitle = parentActivity.title,
+                priority = task.priority,
+            )
         }
         val meetings = client.from("meetings")
             .select()
@@ -183,7 +212,7 @@ object SupabaseBackend {
         return ChurchSnapshot(
             members = members,
             ministries = ministries,
-            activities = (churchActivities + meetings).sortedWith(
+            activities = (churchActivities + churchTasks + meetings).sortedWith(
                 compareBy(ChurchActivity::date, ChurchActivity::time),
             ),
             projects = projects,
@@ -193,16 +222,20 @@ object SupabaseBackend {
     }
 
     suspend fun createProject(currentMember: Member, draft: ProjectDraft) {
+        require(currentMember.role == "Pastor/Administrador") {
+            "Solo el Pastor/Administrador puede crear proyectos."
+        }
         client.from("projects").insert(
             ProjectInsert(
                 id = UUID.randomUUID().toString(),
                 name = draft.name.trim(),
+                objective = draft.objective.trim(),
                 description = draft.description.trim(),
-                ministryId = draft.ministryId,
                 leaderId = draft.leaderId,
                 startDate = draft.startDate,
                 dueDate = draft.dueDate,
-                budget = draft.budget,
+                budget = draft.budgetEstimated,
+                budgetExecuted = draft.budgetExecuted,
                 createdBy = currentMember.id,
             ),
         )
@@ -246,8 +279,8 @@ object SupabaseBackend {
                 activityType = if (draft.ministryId == null) "general" else "ministry",
                 kind = draft.kind,
                 location = draft.location.trim(),
-                priority = if (draft.kind == "task") draft.priority ?: "medium" else null,
-                taskStatus = if (draft.kind == "task") "pending" else null,
+                priority = null,
+                taskStatus = null,
                 createdBy = currentMember.id,
             ),
         )
@@ -264,9 +297,37 @@ object SupabaseBackend {
         }
     }
 
-    suspend fun updateTaskStatus(activityId: String, status: String) {
-        require(status in setOf("pending", "in_progress", "completed", "cancelled"))
-        client.from("activities").update(TaskStatusUpdate(status)) {
+    suspend fun createTask(currentMember: Member, draft: TaskDraft) {
+        require(currentMember.role in setOf("Pastor/Administrador", "Líder de ministerio")) {
+            "Solo el Pastor/Administrador o el Líder de ministerio puede asignar tareas."
+        }
+        client.from("tasks").insert(
+            TaskInsert(
+                id = UUID.randomUUID().toString(),
+                activityId = draft.activityId,
+                title = draft.title.trim(),
+                instructions = draft.instructions.trim(),
+                assigneeId = draft.assigneeId,
+                dueAt = draft.dueAt,
+                priority = draft.priority,
+                status = "pending",
+                assignedBy = currentMember.id,
+            ),
+        )
+    }
+
+    suspend fun updateTaskStatus(taskId: String, status: String) {
+        require(status in setOf("pending", "in_progress", "paused", "completed"))
+        client.from("tasks").update(TaskStatusUpdate(status)) {
+            filter {
+                eq("id", taskId)
+            }
+        }
+    }
+
+    suspend fun updateLegacyTaskStatus(activityId: String, status: String) {
+        require(status in setOf("pending", "in_progress", "paused", "completed", "cancelled"))
+        client.from("activities").update(LegacyTaskStatusUpdate(status)) {
             filter {
                 eq("id", activityId)
                 eq("kind", "task")
@@ -357,6 +418,7 @@ private fun SupabaseActivity.toChurchActivity(isAssignedToCurrentUser: Boolean) 
     },
     taskStatus = taskStatus,
     isAssignedToCurrentUser = isAssignedToCurrentUser,
+    isLegacyTask = kind == "task",
 )
 
 private fun SupabaseMeeting.toChurchActivity() = ChurchActivity(
@@ -376,6 +438,24 @@ private fun String.toEventStatusLabel(): String = when (this) {
     "completed" -> "Completada"
     "cancelled" -> "Cancelada"
     else -> "Programada"
+}
+
+private fun String.toTaskStateLabel(): String = when (this) {
+    "pending" -> "Por hacer"
+    "in_progress" -> "En curso"
+    "paused" -> "En pausa"
+    "completed" -> "Completada"
+    "cancelled" -> "Cancelada"
+    else -> error("El estado de la tarea no está reconocido.")
+}
+
+private fun String.toProjectStatusLabel(): String = when (this) {
+    "pending" -> "Por hacer"
+    "in_progress" -> "En curso"
+    "paused" -> "En pausa"
+    "completed" -> "Completada"
+    "cancelled" -> "Cancelada"
+    else -> error("El estado del proyecto no está reconocido.")
 }
 
 private fun String.isPublicClientKey(): Boolean {
@@ -421,12 +501,15 @@ private data class SupabaseMinistry(
 private data class SupabaseProject(
     val id: String,
     val name: String,
+    val objective: String = "",
     val description: String,
     @SerialName("ministry_id") val ministryId: String? = null,
     @SerialName("leader_id") val leaderId: String,
     @SerialName("due_date") val dueDate: String,
     val budget: Double? = null,
+    @SerialName("budget_executed") val budgetExecuted: Double? = null,
     val progress: Int,
+    val status: String,
 )
 
 @Serializable
@@ -442,6 +525,18 @@ private data class SupabaseActivity(
     val status: String,
     val kind: String,
     @SerialName("task_status") val taskStatus: String? = null,
+)
+
+@Serializable
+private data class SupabaseTask(
+    val id: String,
+    @SerialName("activity_id") val activityId: String,
+    val title: String,
+    val instructions: String,
+    @SerialName("assignee_id") val assigneeId: String,
+    @SerialName("due_at") val dueAt: String? = null,
+    val priority: String,
+    val status: String,
 )
 
 @Serializable
@@ -482,12 +577,13 @@ private data class SupabaseNotification(
 private data class ProjectInsert(
     val id: String,
     val name: String,
+    val objective: String,
     val description: String,
-    @SerialName("ministry_id") val ministryId: String?,
     @SerialName("leader_id") val leaderId: String,
     @SerialName("start_date") val startDate: String,
     @SerialName("due_date") val dueDate: String,
     val budget: Long?,
+    @SerialName("budget_executed") val budgetExecuted: Long?,
     @SerialName("created_by") val createdBy: String,
 )
 
@@ -536,7 +632,25 @@ private data class MeetingParticipantInsert(
 
 @Serializable
 private data class TaskStatusUpdate(
+    val status: String,
+)
+
+@Serializable
+private data class LegacyTaskStatusUpdate(
     @SerialName("task_status") val taskStatus: String,
+)
+
+@Serializable
+private data class TaskInsert(
+    val id: String,
+    @SerialName("activity_id") val activityId: String,
+    val title: String,
+    val instructions: String,
+    @SerialName("assignee_id") val assigneeId: String,
+    @SerialName("due_at") val dueAt: String?,
+    val priority: String,
+    val status: String,
+    @SerialName("assigned_by") val assignedBy: String,
 )
 
 @Serializable

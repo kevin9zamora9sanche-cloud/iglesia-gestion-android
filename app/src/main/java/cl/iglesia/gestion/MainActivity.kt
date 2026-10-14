@@ -90,7 +90,9 @@ import io.github.jan.supabase.gotrue.providers.builtin.Email
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -135,6 +137,7 @@ private fun ChurchApp() {
     var morePage by remember { mutableStateOf(MorePage.Menu) }
     var showProjectForm by remember { mutableStateOf(false) }
     var showActivityForm by remember { mutableStateOf(false) }
+    var showTaskForm by remember { mutableStateOf(false) }
     var showSongForm by remember { mutableStateOf(false) }
     var writeError by remember { mutableStateOf<String?>(null) }
 
@@ -290,6 +293,7 @@ private fun ChurchApp() {
                 val moduleMembers = snapshot?.members.orEmpty()
                 val moduleProjects = snapshot?.projects.orEmpty()
                 val canManage = member.role in setOf("Pastor/Administrador", "Líder de ministerio")
+                val canCreateProjects = member.role == "Pastor/Administrador"
                 val worshipMinistryId = moduleMinistries.firstOrNull {
                     it.name.contains("alabanza", ignoreCase = true)
                 }?.id
@@ -355,11 +359,16 @@ private fun ChurchApp() {
                             moduleMinistries,
                             canManage,
                             onCreateActivity = { showActivityForm = true },
+                            onCreateTask = { showTaskForm = true },
                             onUpdateTask = { activity, status ->
                                 coroutineScope.launch {
                                     writeError = null
                                     try {
-                                        SupabaseBackend.updateTaskStatus(activity.id, status)
+                                        if (activity.isLegacyTask) {
+                                            SupabaseBackend.updateLegacyTaskStatus(activity.id, status)
+                                        } else {
+                                            SupabaseBackend.updateTaskStatus(activity.id, status)
+                                        }
                                         churchSnapshot = SupabaseBackend.loadChurchSnapshot(member)
                                     } catch (error: CancellationException) {
                                         throw error
@@ -377,9 +386,8 @@ private fun ChurchApp() {
                         AppTab.Projects -> ProjectsScreen(
                             scaffoldPadding,
                             moduleProjects,
-                            moduleMinistries,
                             moduleMembers,
-                            canManage,
+                            canCreateProjects,
                             onCreateProject = { showProjectForm = true },
                         )
                         AppTab.More -> when (morePage) {
@@ -447,7 +455,6 @@ private fun ChurchApp() {
                 }
                 if (showProjectForm) {
                     ProjectFormDialog(
-                        ministries = moduleMinistries,
                         members = moduleMembers,
                         currentMember = member,
                         error = writeError,
@@ -486,6 +493,29 @@ private fun ChurchApp() {
                                     throw error
                                 } catch (_: Exception) {
                                     writeError = "No se pudo guardar. Verifica los datos y tus permisos."
+                                }
+                            }
+                        },
+                    )
+                }
+                if (showTaskForm) {
+                    TaskFormDialog(
+                        activities = moduleActivities,
+                        members = moduleMembers,
+                        currentMember = member,
+                        error = writeError,
+                        onDismiss = { showTaskForm = false },
+                        onSubmit = { draft ->
+                            coroutineScope.launch {
+                                writeError = null
+                                try {
+                                    SupabaseBackend.createTask(member, draft)
+                                    churchSnapshot = SupabaseBackend.loadChurchSnapshot(member)
+                                    showTaskForm = false
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (_: Exception) {
+                                    writeError = "No se pudo crear la tarea. Verifica la actividad, el responsable y tus permisos."
                                 }
                             }
                         },
@@ -744,8 +774,20 @@ private fun DashboardScreen(
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatCard("Actividades", activities.count { it.status == "Programada" }.toString(), "▣", BrandLight, Modifier.weight(1f))
-                StatCard("Completadas", activities.count { it.status == "Completada" }.toString(), "✓", Green, Modifier.weight(1f))
+                StatCard(
+                    "Actividades",
+                    activities.count { it.kind != "Tarea" && it.status == "Programada" }.toString(),
+                    "▣",
+                    BrandLight,
+                    Modifier.weight(1f),
+                )
+                StatCard(
+                    "Completadas",
+                    activities.count { it.kind != "Tarea" && it.status == "Completada" }.toString(),
+                    "✓",
+                    Green,
+                    Modifier.weight(1f),
+                )
             }
         }
         item {
@@ -830,11 +872,18 @@ private fun ActivityCard(activity: ChurchActivity, ministries: List<Ministry>) {
             }
             if (activity.kind == "Tarea") {
                 Spacer(Modifier.height(8.dp))
+                activity.parentActivityTitle?.let {
+                    Text("Actividad: $it", color = Brand, fontSize = 11.sp)
+                    Spacer(Modifier.height(3.dp))
+                }
                 Text(
                     "Estado: ${activity.taskStatus?.toTaskStatusLabel() ?: "Pendiente"}",
                     color = TextMuted,
                     fontSize = 11.sp,
                 )
+                activity.priority?.let {
+                    Text("Prioridad: ${it.toPriorityLabel()}", color = TextMuted, fontSize = 11.sp)
+                }
             }
         }
     }
@@ -847,6 +896,7 @@ private fun CalendarScreen(
     ministries: List<Ministry>,
     canManage: Boolean,
     onCreateActivity: () -> Unit,
+    onCreateTask: () -> Unit,
     onUpdateTask: (ChurchActivity, String) -> Unit,
 ) {
     val today = LocalDate.now()
@@ -865,8 +915,13 @@ private fun CalendarScreen(
                 Text("Actividades y responsabilidades", color = TextMuted, fontSize = 13.sp)
                 if (canManage) {
                     Spacer(Modifier.height(10.dp))
-                    Button(onClick = onCreateActivity, colors = ButtonDefaults.buttonColors(containerColor = Brand)) {
-                        Text("Crear actividad o tarea")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onCreateActivity, colors = ButtonDefaults.buttonColors(containerColor = Brand)) {
+                            Text("Crear actividad")
+                        }
+                        OutlinedButton(onClick = onCreateTask, enabled = activities.any { it.kind != "Tarea" && it.kind != "Reunión" }) {
+                            Text("Crear tarea")
+                        }
                     }
                 }
             }
@@ -924,18 +979,34 @@ private fun CalendarScreen(
                                 activity.kind == "Tarea" &&
                                 activity.taskStatus !in setOf("completed", "cancelled")
                             ) {
-                                TextButton(
-                                    onClick = {
-                                        val next = if (activity.taskStatus == "in_progress") "completed" else "in_progress"
-                                        onUpdateTask(activity, next)
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                ) {
-                                    Text(
-                                        if (activity.taskStatus == "in_progress") "Completar tarea" else "Iniciar tarea",
-                                        color = Brand,
-                                        fontSize = 12.sp,
-                                    )
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    val nextStatus = when (activity.taskStatus) {
+                                        "in_progress" -> "paused"
+                                        "paused" -> "pending"
+                                        else -> "in_progress"
+                                    }
+                                    TextButton(
+                                        onClick = { onUpdateTask(activity, nextStatus) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    ) {
+                                        Text(
+                                            when (activity.taskStatus) {
+                                                "in_progress" -> "Pausar"
+                                                "paused" -> "Reanudar"
+                                                else -> "Iniciar"
+                                            },
+                                            color = Brand,
+                                            fontSize = 12.sp,
+                                        )
+                                    }
+                                    if (activity.taskStatus in setOf("in_progress", "paused")) {
+                                        TextButton(
+                                            onClick = { onUpdateTask(activity, "completed") },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        ) {
+                                            Text("Completar", color = Brand, fontSize = 12.sp)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1027,9 +1098,8 @@ private fun MinistryCompactCard(ministry: Ministry, members: List<Member>) {
 private fun ProjectsScreen(
     padding: PaddingValues,
     projects: List<ChurchProject>,
-    ministries: List<Ministry>,
     members: List<Member>,
-    canManage: Boolean,
+    canCreateProjects: Boolean,
     onCreateProject: () -> Unit,
 ) {
     LazyColumn(
@@ -1041,7 +1111,7 @@ private fun ProjectsScreen(
             Text("PLANIFICACIÓN", color = Gold, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
             Text("Proyectos", color = Brand, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             Text("Objetivos y avance de la iglesia.", color = TextMuted, fontSize = 13.sp)
-            if (canManage) {
+            if (canCreateProjects) {
                 Spacer(Modifier.height(10.dp))
                 Button(onClick = onCreateProject, colors = ButtonDefaults.buttonColors(containerColor = Brand)) {
                     Text("Crear proyecto")
@@ -1054,7 +1124,6 @@ private fun ProjectsScreen(
             }
         }
         items(projects, key = { it.id }) { project ->
-            val ministry = ministries.find { it.id == project.ministryId }
             val leader = members.find { it.id == project.leaderId }
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -1062,11 +1131,16 @@ private fun ProjectsScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, BorderWarm),
             ) {
                 Column(Modifier.fillMaxWidth().padding(18.dp)) {
-                    Text(ministry?.name ?: "Área institucional", color = Gold, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Text("PROYECTO INSTITUCIONAL", color = Gold, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(4.dp))
                     Text(project.name, color = Brand, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
+                    Text("Objetivo", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text(project.objective, color = TextMuted, fontSize = 13.sp, lineHeight = 19.sp)
+                    Spacer(Modifier.height(8.dp))
                     Text(project.description, color = TextMuted, fontSize = 13.sp, lineHeight = 19.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Estado: ${project.status}", color = TextMuted, fontSize = 12.sp)
                     Spacer(Modifier.height(18.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Avance", color = TextMuted, fontSize = 12.sp)
@@ -1090,9 +1164,14 @@ private fun ProjectsScreen(
                             Text("En ${project.dueInDays} días", color = Color(0xFF44403C), fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         }
                     }
-                    if (project.budget != null) {
+                    if (project.budgetEstimated != null || project.budgetExecuted != null) {
                         Spacer(Modifier.height(12.dp))
-                        Text("Presupuesto: ${project.budget.toCLPCurrency()}", color = TextMuted, fontSize = 12.sp)
+                        project.budgetEstimated?.let {
+                            Text("Presupuesto estimado: ${it.toCLPCurrency()}", color = TextMuted, fontSize = 12.sp)
+                        }
+                        project.budgetExecuted?.let {
+                            Text("Presupuesto ejecutado: ${it.toCLPCurrency()}", color = TextMuted, fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -1428,7 +1507,6 @@ private fun NotificationsScreen(
 
 @Composable
 private fun ProjectFormDialog(
-    ministries: List<Ministry>,
     members: List<Member>,
     currentMember: Member,
     error: String?,
@@ -1436,31 +1514,23 @@ private fun ProjectFormDialog(
     onSubmit: (ProjectDraft) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
+    var objective by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var startDate by remember { mutableStateOf(LocalDate.now().toString()) }
     var dueDate by remember { mutableStateOf(LocalDate.now().plusDays(30).toString()) }
-    var budget by remember { mutableStateOf("") }
-    var ministryId by remember { mutableStateOf(currentMember.ministryId) }
+    var budgetEstimated by remember { mutableStateOf("") }
+    var budgetExecuted by remember { mutableStateOf("") }
     var leaderId by remember { mutableStateOf(currentMember.id) }
-    val ministryLeader = currentMember.role == "Líder de ministerio"
-    val availableMinistries = if (ministryLeader) {
-        ministries.filter { it.id == currentMember.ministryId }
-    } else {
-        ministries
-    }
     val datesValid = runCatching {
         !LocalDate.parse(dueDate).isBefore(LocalDate.parse(startDate))
     }.getOrDefault(false)
-    val budgetValid = budget.isBlank() || budget.toLongOrNull()?.let { it >= 0 } == true
-    val leaderOptions = members.filter {
-        it.active && (
-            (ministryId == null && !ministryLeader) ||
-                it.ministryId == ministryId ||
-                it.id == currentMember.id
-            )
-    }
-    val canSubmit = name.isNotBlank() && datesValid && budgetValid &&
-        members.any { it.id == leaderId } && (!ministryLeader || ministryId == currentMember.ministryId)
+    val estimatedBudgetValid = budgetEstimated.isBlank() ||
+        budgetEstimated.toLongOrNull()?.let { it >= 0 } == true
+    val executedBudgetValid = budgetExecuted.isBlank() ||
+        budgetExecuted.toLongOrNull()?.let { it >= 0 } == true
+    val leaderOptions = members.filter(Member::active)
+    val canSubmit = name.isNotBlank() && objective.isNotBlank() && datesValid &&
+        estimatedBudgetValid && executedBudgetValid && leaderOptions.any { it.id == leaderId }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1471,23 +1541,8 @@ private fun ProjectFormDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedTextField(name, { name = it }, label = { Text("Nombre") }, singleLine = true)
+                OutlinedTextField(objective, { objective = it }, label = { Text("Objetivo") })
                 OutlinedTextField(description, { description = it }, label = { Text("Descripción") })
-                Text("Ministerio", color = TextMuted, fontSize = 12.sp)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (!ministryLeader) {
-                        OutlinedButton(onClick = { ministryId = null; leaderId = currentMember.id }) {
-                            Text(if (ministryId == null) "✓ General" else "General")
-                        }
-                    }
-                    availableMinistries.forEach { ministry ->
-                        OutlinedButton(onClick = {
-                            ministryId = ministry.id
-                            leaderId = members.firstOrNull { it.ministryId == ministry.id }?.id ?: currentMember.id
-                        }) {
-                            Text(if (ministryId == ministry.id) "✓ ${ministry.name}" else ministry.name)
-                        }
-                    }
-                }
                 Text("Responsable", color = TextMuted, fontSize = 12.sp)
                 leaderOptions.forEach { candidate ->
                     Row(
@@ -1500,9 +1555,10 @@ private fun ProjectFormDialog(
                 }
                 OutlinedTextField(startDate, { startDate = it }, label = { Text("Fecha de inicio (AAAA-MM-DD)") }, singleLine = true)
                 OutlinedTextField(dueDate, { dueDate = it }, label = { Text("Fecha objetivo (AAAA-MM-DD)") }, singleLine = true)
-                OutlinedTextField(budget, { budget = it }, label = { Text("Presupuesto en pesos (opcional)") }, singleLine = true)
+                OutlinedTextField(budgetEstimated, { budgetEstimated = it }, label = { Text("Presupuesto estimado en pesos (opcional)") }, singleLine = true)
+                OutlinedTextField(budgetExecuted, { budgetExecuted = it }, label = { Text("Presupuesto ejecutado en pesos (opcional)") }, singleLine = true)
                 if (!datesValid) Text("Revisa las fechas y asegúrate de que la fecha objetivo no sea anterior.", color = Color(0xFFB42318), fontSize = 11.sp)
-                if (!budgetValid) Text("El presupuesto debe ser un número entero no negativo.", color = Color(0xFFB42318), fontSize = 11.sp)
+                if (!estimatedBudgetValid || !executedBudgetValid) Text("Los presupuestos deben ser números enteros no negativos.", color = Color(0xFFB42318), fontSize = 11.sp)
                 if (error != null) Text(error, color = Color(0xFFB42318), fontSize = 12.sp)
             }
         },
@@ -1513,12 +1569,13 @@ private fun ProjectFormDialog(
                     onSubmit(
                         ProjectDraft(
                             name = name.trim(),
+                            objective = objective.trim(),
                             description = description.trim(),
-                            ministryId = ministryId,
                             leaderId = leaderId,
                             startDate = startDate,
                             dueDate = dueDate,
-                            budget = budget.takeIf { it.isNotBlank() }?.toLongOrNull(),
+                            budgetEstimated = budgetEstimated.takeIf { it.isNotBlank() }?.toLongOrNull(),
+                            budgetExecuted = budgetExecuted.takeIf { it.isNotBlank() }?.toLongOrNull(),
                         ),
                     )
                 },
@@ -1545,7 +1602,6 @@ private fun ActivityFormDialog(
     var location by remember { mutableStateOf("") }
     var ministryId by remember { mutableStateOf(currentMember.ministryId) }
     var kind by remember { mutableStateOf("activity") }
-    var priority by remember { mutableStateOf("medium") }
     val assignees = remember { mutableStateOf(setOf(currentMember.id)) }
     val ministryLeader = currentMember.role == "Líder de ministerio"
     val availableMinistries = if (ministryLeader) {
@@ -1569,7 +1625,7 @@ private fun ActivityFormDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Crear actividad o tarea", color = Brand) },
+        title = { Text("Crear actividad o reunión", color = Brand) },
         text = {
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
@@ -1578,7 +1634,7 @@ private fun ActivityFormDialog(
                 OutlinedTextField(title, { title = it }, label = { Text("Título") }, singleLine = true)
                 OutlinedTextField(description, { description = it }, label = { Text("Descripción") })
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("activity" to "Actividad", "task" to "Tarea", "meeting" to "Reunión").forEach { (value, label) ->
+                    listOf("activity" to "Actividad", "meeting" to "Reunión").forEach { (value, label) ->
                         OutlinedButton(onClick = { kind = value }) {
                             Text(if (kind == value) "✓ $label" else label)
                         }
@@ -1601,16 +1657,6 @@ private fun ActivityFormDialog(
                 OutlinedTextField(startTime, { startTime = it }, label = { Text("Inicio (HH:MM)") }, singleLine = true)
                 OutlinedTextField(endTime, { endTime = it }, label = { Text("Término (HH:MM)") }, singleLine = true)
                 OutlinedTextField(location, { location = it }, label = { Text("Lugar") }, singleLine = true)
-                if (kind == "task") {
-                    Text("Prioridad", color = TextMuted, fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("high" to "Alta", "medium" to "Media", "low" to "Baja").forEach { (value, label) ->
-                            OutlinedButton(onClick = { priority = value }) {
-                                Text(if (priority == value) "✓ $label" else label)
-                            }
-                        }
-                    }
-                }
                 Text(if (kind == "meeting") "Participantes" else "Responsables", color = TextMuted, fontSize = 12.sp)
                 availableMembers.forEach { candidate ->
                     Row(
@@ -1650,8 +1696,138 @@ private fun ActivityFormDialog(
                             ministryId = ministryId,
                             location = location.trim(),
                             kind = kind,
-                            priority = if (kind == "task") priority else null,
                             assigneeIds = assignees.value.toList(),
+                        ),
+                    )
+                },
+            ) { Text("Guardar", color = Brand) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar", color = TextMuted) } },
+    )
+}
+
+@Composable
+private fun TaskFormDialog(
+    activities: List<ChurchActivity>,
+    members: List<Member>,
+    currentMember: Member,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (TaskDraft) -> Unit,
+) {
+    val ministryLeader = currentMember.role == "Líder de ministerio"
+    val parentActivities = activities.filter {
+        it.kind != "Tarea" &&
+            it.kind != "Reunión" &&
+            (!ministryLeader || it.ministryId == currentMember.ministryId)
+    }
+    var activityId by remember(parentActivities) {
+        mutableStateOf(parentActivities.firstOrNull()?.id.orEmpty())
+    }
+    var title by remember { mutableStateOf("") }
+    var instructions by remember { mutableStateOf("") }
+    var dueDate by remember { mutableStateOf("") }
+    var dueTime by remember { mutableStateOf("18:00") }
+    var priority by remember { mutableStateOf("medium") }
+    var assigneeId by remember { mutableStateOf(currentMember.id) }
+
+    val availableMembers = members.filter { member ->
+        member.active &&
+            (!ministryLeader || member.ministryId == currentMember.ministryId || member.id == currentMember.id)
+    }
+    val deadlineValid = dueDate.isBlank() || runCatching {
+        LocalDate.parse(dueDate)
+        LocalTime.parse(dueTime)
+    }.isSuccess
+    val canSubmit = title.isNotBlank() &&
+        instructions.isNotBlank() &&
+        parentActivities.any { it.id == activityId } &&
+        availableMembers.any { it.id == assigneeId } &&
+        deadlineValid
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Crear tarea", color = Brand) },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(title, { title = it }, label = { Text("Título") }, singleLine = true)
+                OutlinedTextField(instructions, { instructions = it }, label = { Text("Instrucciones") })
+                Text("Actividad asociada", color = TextMuted, fontSize = 12.sp)
+                parentActivities.forEach { activity ->
+                    OutlinedButton(
+                        onClick = { activityId = activity.id },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (activity.id == activityId) "✓ ${activity.title}" else activity.title)
+                    }
+                }
+                if (parentActivities.isEmpty()) {
+                    Text("Primero debes crear una actividad para poder asignarle tareas.", color = TextMuted, fontSize = 12.sp)
+                }
+                Text("Responsable", color = TextMuted, fontSize = 12.sp)
+                availableMembers.forEach { candidate ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { assigneeId = candidate.id },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = assigneeId == candidate.id,
+                            onCheckedChange = { checked ->
+                                if (checked) assigneeId = candidate.id
+                            },
+                        )
+                        Text(candidate.name, color = Brand, fontSize = 12.sp)
+                    }
+                }
+                Text("Prioridad", color = TextMuted, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("high" to "Alta", "medium" to "Media", "low" to "Baja").forEach { (value, label) ->
+                        OutlinedButton(onClick = { priority = value }) {
+                            Text(if (priority == value) "✓ $label" else label)
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    dueDate,
+                    { dueDate = it },
+                    label = { Text("Fecha límite (AAAA-MM-DD, opcional)") },
+                    singleLine = true,
+                )
+                if (dueDate.isNotBlank()) {
+                    OutlinedTextField(
+                        dueTime,
+                        { dueTime = it },
+                        label = { Text("Hora límite (HH:MM)") },
+                        singleLine = true,
+                    )
+                }
+                if (!deadlineValid) {
+                    Text("Revisa el formato de la fecha y hora límite.", color = Color(0xFFB42318), fontSize = 11.sp)
+                }
+                if (error != null) Text(error, color = Color(0xFFB42318), fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canSubmit,
+                onClick = {
+                    val dueAt = dueDate.takeIf(String::isNotBlank)?.let {
+                        LocalDateTime.parse("${it}T$dueTime")
+                            .atZone(ZoneId.systemDefault())
+                            .toOffsetDateTime()
+                            .toString()
+                    }
+                    onSubmit(
+                        TaskDraft(
+                            activityId = activityId,
+                            title = title.trim(),
+                            instructions = instructions.trim(),
+                            assigneeId = assigneeId,
+                            dueAt = dueAt,
+                            priority = priority,
                         ),
                     )
                 },
@@ -1689,10 +1865,19 @@ private fun Long.toCLPCurrency(): String =
     "$" + String.format(Locale("es", "CL"), "%,d", this).replace(',', '.')
 
 private fun String.toTaskStatusLabel(): String = when (this) {
+    "pending" -> "Por hacer"
     "in_progress" -> "En curso"
+    "paused" -> "En pausa"
     "completed" -> "Completada"
     "cancelled" -> "Cancelada"
-    else -> "Pendiente"
+    else -> error("El estado de la tarea no está reconocido.")
+}
+
+private fun String.toPriorityLabel(): String = when (this) {
+    "high" -> "Alta"
+    "medium" -> "Media"
+    "low" -> "Baja"
+    else -> error("La prioridad de la tarea no está reconocida.")
 }
 
 private fun String.toNotificationLabel(): String = when (this) {
