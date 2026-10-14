@@ -1,0 +1,3 @@
+# Copy this file to supabase.properties and fill in the public project values.
+supabase.url=https://<project-ref>.supabase.co
+supabase.anon_key=<your-public-anon-or-publishable-key>

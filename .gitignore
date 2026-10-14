@@ -1,0 +1,9 @@
+.gradle/
+.idea/
+build/
+app/build/
+local.properties
+supabase.properties
+captures/
+.externalNativeBuild/
+.cxx/
