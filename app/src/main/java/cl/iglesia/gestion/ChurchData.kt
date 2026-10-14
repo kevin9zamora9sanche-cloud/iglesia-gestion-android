@@ -11,6 +11,7 @@ data class Member(
     val email: String,
     val active: Boolean = true,
     val phone: String = "",
+    val ministryIds: List<String> = ministryId?.let(::listOf).orEmpty(),
 )
 
 data class Ministry(

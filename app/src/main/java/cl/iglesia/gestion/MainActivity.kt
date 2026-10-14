@@ -468,8 +468,8 @@ private fun ChurchApp() {
                                     showProjectForm = false
                                 } catch (error: CancellationException) {
                                     throw error
-                                } catch (_: Exception) {
-                                    writeError = "No se pudo crear el proyecto. Verifica los datos y tus permisos."
+                                } catch (error: Exception) {
+                                    writeError = "No se pudo crear el proyecto: ${error.message ?: "verifica los datos y tus permisos."}"
                                 }
                             }
                         },
@@ -491,8 +491,8 @@ private fun ChurchApp() {
                                     showActivityForm = false
                                 } catch (error: CancellationException) {
                                     throw error
-                                } catch (_: Exception) {
-                                    writeError = "No se pudo guardar. Verifica los datos y tus permisos."
+                                } catch (error: Exception) {
+                                    writeError = "No se pudo guardar: ${error.message ?: "verifica los datos y tus permisos."}"
                                 }
                             }
                         },
@@ -1604,13 +1604,18 @@ private fun ActivityFormDialog(
     var kind by remember { mutableStateOf("activity") }
     val assignees = remember { mutableStateOf(setOf(currentMember.id)) }
     val ministryLeader = currentMember.role == "Líder de ministerio"
+    val managedMinistryIds = ministries
+        .filter { it.leaderId == currentMember.id }
+        .mapTo(mutableSetOf(), Ministry::id)
     val availableMinistries = if (ministryLeader) {
-        ministries.filter { it.id == currentMember.ministryId }
+        ministries.filter { it.id in managedMinistryIds }
     } else {
         ministries
     }
     val availableMembers = if (ministryLeader) {
-        members.filter { it.active && (it.ministryId == ministryId || it.id == currentMember.id) }
+        members.filter {
+            it.active && ministryId != null && ministryId in it.ministryIds
+        }
     } else {
         members.filter(Member::active)
     }
@@ -1621,7 +1626,12 @@ private fun ActivityFormDialog(
     val canSubmit = title.isNotBlank() &&
         scheduleValid &&
         (ministryId == null || ministries.any { it.id == ministryId }) &&
-        (!ministryLeader || ministryId == currentMember.ministryId)
+        (!ministryLeader || ministryId in managedMinistryIds) &&
+        (kind == "meeting" ||
+            (assignees.value.isNotEmpty() &&
+                assignees.value.all { assigneeId ->
+                    availableMembers.any { it.id == assigneeId }
+                }))
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1648,7 +1658,10 @@ private fun ActivityFormDialog(
                         }
                     }
                     availableMinistries.forEach { ministry ->
-                        OutlinedButton(onClick = { ministryId = ministry.id }) {
+                        OutlinedButton(onClick = {
+                            ministryId = ministry.id
+                            assignees.value = emptySet()
+                        }) {
                             Text(if (ministryId == ministry.id) "✓ ${ministry.name}" else ministry.name)
                         }
                     }
@@ -1677,6 +1690,13 @@ private fun ActivityFormDialog(
                         )
                         Text(candidate.name, color = Brand, fontSize = 12.sp)
                     }
+                }
+                if (kind == "activity" && availableMembers.isEmpty()) {
+                    Text(
+                        "No hay miembros activos disponibles en este ministerio para asignar.",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                    )
                 }
                 if (!scheduleValid) Text("Usa fechas y horas válidas; el término debe ser posterior al inicio.", color = Color(0xFFB42318), fontSize = 11.sp)
                 if (error != null) Text(error, color = Color(0xFFB42318), fontSize = 12.sp)
@@ -1719,7 +1739,7 @@ private fun TaskFormDialog(
     val parentActivities = activities.filter {
         it.kind != "Tarea" &&
             it.kind != "Reunión" &&
-            (!ministryLeader || it.ministryId == currentMember.ministryId)
+            (!ministryLeader || it.ministryId in currentMember.ministryIds)
     }
     var activityId by remember(parentActivities) {
         mutableStateOf(parentActivities.firstOrNull()?.id.orEmpty())
@@ -1730,10 +1750,12 @@ private fun TaskFormDialog(
     var dueTime by remember { mutableStateOf("18:00") }
     var priority by remember { mutableStateOf("medium") }
     var assigneeId by remember { mutableStateOf(currentMember.id) }
+    val selectedParentMinistryId = parentActivities.firstOrNull { it.id == activityId }?.ministryId
 
     val availableMembers = members.filter { member ->
         member.active &&
-            (!ministryLeader || member.ministryId == currentMember.ministryId || member.id == currentMember.id)
+            (!ministryLeader ||
+                (selectedParentMinistryId != null && selectedParentMinistryId in member.ministryIds))
     }
     val deadlineValid = dueDate.isBlank() || runCatching {
         LocalDate.parse(dueDate)
@@ -1757,8 +1779,17 @@ private fun TaskFormDialog(
                 OutlinedTextField(instructions, { instructions = it }, label = { Text("Instrucciones") })
                 Text("Actividad asociada", color = TextMuted, fontSize = 12.sp)
                 parentActivities.forEach { activity ->
+                    val activityMembers = members.filter { member ->
+                        member.active &&
+                            (!ministryLeader || activity.ministryId in member.ministryIds)
+                    }
                     OutlinedButton(
-                        onClick = { activityId = activity.id },
+                        onClick = {
+                            activityId = activity.id
+                            if (assigneeId !in activityMembers.map(Member::id)) {
+                                assigneeId = activityMembers.firstOrNull()?.id.orEmpty()
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(if (activity.id == activityId) "✓ ${activity.title}" else activity.title)
@@ -1781,6 +1812,13 @@ private fun TaskFormDialog(
                         )
                         Text(candidate.name, color = Brand, fontSize = 12.sp)
                     }
+                }
+                if (availableMembers.isEmpty()) {
+                    Text(
+                        "No hay miembros activos disponibles en esta actividad para asignar.",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                    )
                 }
                 Text("Prioridad", color = TextMuted, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

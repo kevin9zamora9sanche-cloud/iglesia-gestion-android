@@ -47,15 +47,14 @@ object SupabaseBackend {
                 }
             }
             .decodeSingle<SupabaseProfile>()
-        val ministryId = client.from("ministry_memberships")
+        val ministryIds = client.from("ministry_memberships")
             .select {
                 filter {
                     eq("user_id", user.id)
                 }
             }
             .decodeList<SupabaseMembership>()
-            .firstOrNull()
-            ?.ministryId
+            .map(SupabaseMembership::ministryId)
 
         check(profile.isActive) {
             "Esta cuenta está inactiva. Contacta al Pastor/Administrador."
@@ -68,7 +67,7 @@ object SupabaseBackend {
             id = profile.id,
             name = displayName,
             role = profile.role.toRoleLabel(),
-            ministryId = ministryId,
+            ministryId = ministryIds.firstOrNull(),
             initials = displayName.split(Regex("\\s+"))
                 .take(2)
                 .mapNotNull(String::firstOrNull)
@@ -77,6 +76,7 @@ object SupabaseBackend {
             email = user.email.orEmpty(),
             active = profile.isActive,
             phone = profile.phone.orEmpty(),
+            ministryIds = ministryIds,
         )
     }
 
@@ -104,6 +104,9 @@ object SupabaseBackend {
                 email = if (profile.id == currentMember.id) currentMember.email else "",
                 active = profile.isActive,
                 phone = profile.phone.orEmpty(),
+                ministryIds = membershipRows
+                    .filter { it.userId == profile.id }
+                    .map(SupabaseMembership::ministryId),
             )
         }
         val leaderByMinistry = membershipRows
