@@ -44,14 +44,8 @@ de datos de demostración.
    JDK 17 o JDK 21 como **Gradle JDK**.
 3. Instala **Android SDK Platform 35** y **Android SDK Build-Tools 35.0.0**
    desde **Tools > SDK Manager** si aún no están instalados.
-4. Copia `supabase.properties.example` a `supabase.properties` en la raíz y
-   completa la URL de tu proyecto Supabase y su clave pública anon/publishable:
-
-   ```properties
-   supabase.url=https://<project-ref>.supabase.co
-   supabase.anon_key=<your-public-anon-or-publishable-key>
-   ```
-
+4. La configuración pública de Supabase está en `supabase.properties` y se
+   incluye en el repositorio para que la aplicación funcione al clonarlo.
 5. En **Tools > Device Manager**, inicia un emulador o conecta un dispositivo.
 6. Espera a que Android Studio complete **Gradle Sync**, selecciona la
    configuración **app** y pulsa **Run**.
@@ -74,11 +68,11 @@ sigue la sección Supabase del
 Las cuentas deben ser creadas por un administrador; no hay registro público
 desde la aplicación.
 
-La URL del proyecto y la clave anon/publishable son configuración pública de
-cliente. Nunca uses una clave `service_role` o `secret` en esta aplicación. No
-confirmes `supabase.properties`, `local.properties` ni otros secretos o archivos
-locales; el archivo de configuración local está excluido del control de
-versiones.
+La URL del proyecto y la clave anon/publishable de `supabase.properties` son
+configuración pública de cliente y están sujetas a las políticas RLS de
+Supabase. Nunca pongas una clave `service_role` o `secret` en la aplicación ni
+en el repositorio. `local.properties` y otros ajustes locales de Android Studio
+no se confirman en Git.
 
 ## Estructura del proyecto
 
