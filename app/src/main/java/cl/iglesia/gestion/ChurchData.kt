@@ -34,6 +34,10 @@ data class ChurchActivity(
     val location: String,
     val status: String = "Programada",
     val kind: String = "Actividad",
+    val category: String = "",
+    val projectId: String? = null,
+    val worshipLeaderId: String? = null,
+    val preacherId: String? = null,
     val taskStatus: String? = null,
     val isAssignedToCurrentUser: Boolean = false,
     val parentActivityTitle: String? = null,
@@ -82,6 +86,12 @@ data class ProjectDraft(
     val budgetExecuted: Long?,
 )
 
+data class ProjectUpdateDraft(
+    val id: String,
+    val status: String,
+    val budgetExecuted: Long?,
+)
+
 data class ActivityDraft(
     val title: String,
     val description: String,
@@ -91,6 +101,10 @@ data class ActivityDraft(
     val ministryId: String?,
     val location: String,
     val kind: String,
+    val category: String = "Libre",
+    val projectId: String? = null,
+    val worshipLeaderId: String? = null,
+    val preacherId: String? = null,
     val assigneeIds: List<String>,
 )
 

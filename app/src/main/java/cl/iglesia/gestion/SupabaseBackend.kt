@@ -122,10 +122,32 @@ object SupabaseBackend {
                 description = ministry.description,
             )
         }
+        val activities = client.from("activities")
+            .select()
+            .decodeList<SupabaseActivity>()
+        val tasks = client.from("tasks")
+            .select()
+            .decodeList<SupabaseTask>()
+        val activitiesByProject = activities.filter { it.projectId != null }.groupBy { it.projectId }
+        val tasksByActivity = tasks.groupBy { it.activityId }
         val projects = client.from("projects")
             .select()
             .decodeList<SupabaseProject>()
             .map { project ->
+                val projectActivities = activitiesByProject[project.id].orEmpty()
+                val calculatedProgress = if (projectActivities.isNotEmpty()) {
+                    val sumProgress = projectActivities.sumOf { act ->
+                        val actTasks = tasksByActivity[act.id].orEmpty()
+                        if (actTasks.isNotEmpty()) {
+                            (actTasks.count { it.status == "completed" }.toDouble() / actTasks.size * 100).toInt()
+                        } else {
+                            if (act.status == "completed") 100 else 0
+                        }
+                    }
+                    sumProgress / projectActivities.size
+                } else {
+                    project.progress
+                }
                 ChurchProject(
                     name = project.name,
                     objective = project.objective,
@@ -135,16 +157,13 @@ object SupabaseBackend {
                         LocalDate.now(),
                         LocalDate.parse(project.dueDate),
                     ).coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt(),
-                    progress = project.progress,
+                    progress = calculatedProgress,
                     status = project.status.toProjectStatusLabel(),
                     budgetEstimated = project.budget?.toLong(),
                     budgetExecuted = project.budgetExecuted?.toLong(),
                     id = project.id,
                 )
             }
-        val activities = client.from("activities")
-            .select()
-            .decodeList<SupabaseActivity>()
         val assignedActivityIds = client.from("activity_assignments")
             .select {
                 filter {
@@ -156,9 +175,6 @@ object SupabaseBackend {
         val churchActivities = activities.map {
             it.toChurchActivity(it.id in assignedActivityIds)
         }
-        val tasks = client.from("tasks")
-            .select()
-            .decodeList<SupabaseTask>()
         val activityById = activities.associateBy(SupabaseActivity::id)
         val churchTasks = tasks.map { task ->
             val parentActivity = checkNotNull(activityById[task.activityId]) {
@@ -244,6 +260,30 @@ object SupabaseBackend {
         )
     }
 
+    suspend fun updateProjectAsPastor(currentMember: Member, draft: ProjectUpdateDraft) {
+        require(currentMember.role == "Pastor/Administrador") {
+            "Solo el Pastor/Administrador puede actualizar proyectos."
+        }
+        val databaseStatus = when (draft.status) {
+            "Por hacer" -> "pending"
+            "En curso" -> "in_progress"
+            "En pausa" -> "paused"
+            "Completada" -> "completed"
+            "Cancelada" -> "cancelled"
+            else -> draft.status
+        }
+        client.from("projects").update(
+            ProjectUpdatePayload(
+                status = databaseStatus,
+                budgetExecuted = draft.budgetExecuted,
+            ),
+        ) {
+            filter {
+                eq("id", draft.id)
+            }
+        }
+    }
+
     suspend fun createActivity(currentMember: Member, draft: ActivityDraft) {
         val activityId = UUID.randomUUID().toString()
         if (draft.kind == "meeting") {
@@ -282,6 +322,10 @@ object SupabaseBackend {
                 activityType = if (draft.ministryId == null) "general" else "ministry",
                 kind = draft.kind,
                 location = draft.location.trim(),
+                category = draft.category,
+                projectId = draft.projectId,
+                worshipLeaderId = draft.worshipLeaderId,
+                preacherId = draft.preacherId,
                 priority = null,
                 taskStatus = null,
                 createdBy = currentMember.id,
@@ -419,6 +463,10 @@ private fun SupabaseActivity.toChurchActivity(isAssignedToCurrentUser: Boolean) 
         "meeting" -> "Reunión"
         else -> "Actividad"
     },
+    category = category,
+    projectId = projectId,
+    worshipLeaderId = worshipLeaderId,
+    preacherId = preacherId,
     taskStatus = taskStatus,
     isAssignedToCurrentUser = isAssignedToCurrentUser,
     isLegacyTask = kind == "task",
@@ -527,6 +575,10 @@ private data class SupabaseActivity(
     val location: String,
     val status: String,
     val kind: String,
+    val category: String = "",
+    @SerialName("project_id") val projectId: String? = null,
+    @SerialName("worship_leader_id") val worshipLeaderId: String? = null,
+    @SerialName("preacher_id") val preacherId: String? = null,
     @SerialName("task_status") val taskStatus: String? = null,
 )
 
@@ -591,6 +643,12 @@ private data class ProjectInsert(
 )
 
 @Serializable
+private data class ProjectUpdatePayload(
+    val status: String,
+    @SerialName("budget_executed") val budgetExecuted: Long?,
+)
+
+@Serializable
 private data class ActivityInsert(
     val id: String,
     val title: String,
@@ -602,6 +660,10 @@ private data class ActivityInsert(
     @SerialName("activity_type") val activityType: String,
     val kind: String,
     val location: String,
+    val category: String,
+    @SerialName("project_id") val projectId: String?,
+    @SerialName("worship_leader_id") val worshipLeaderId: String?,
+    @SerialName("preacher_id") val preacherId: String?,
     val priority: String?,
     @SerialName("task_status") val taskStatus: String?,
     @SerialName("created_by") val createdBy: String,

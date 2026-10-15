@@ -136,6 +136,7 @@ private fun ChurchApp() {
     var currentTab by remember { mutableStateOf(AppTab.Home) }
     var morePage by remember { mutableStateOf(MorePage.Menu) }
     var showProjectForm by remember { mutableStateOf(false) }
+    var editingProject by remember { mutableStateOf<ChurchProject?>(null) }
     var showActivityForm by remember { mutableStateOf(false) }
     var showTaskForm by remember { mutableStateOf(false) }
     var showSongForm by remember { mutableStateOf(false) }
@@ -352,11 +353,14 @@ private fun ChurchApp() {
                             moduleActivities,
                             moduleMinistries,
                             moduleMembers,
+                            moduleProjects,
                         )
                         AppTab.Calendar -> CalendarScreen(
                             scaffoldPadding,
                             moduleActivities,
                             moduleMinistries,
+                            moduleMembers,
+                            moduleProjects,
                             canManage,
                             onCreateActivity = { showActivityForm = true },
                             onCreateTask = { showTaskForm = true },
@@ -389,6 +393,7 @@ private fun ChurchApp() {
                             moduleMembers,
                             canCreateProjects,
                             onCreateProject = { showProjectForm = true },
+                            onEditProject = { editingProject = it },
                         )
                         AppTab.More -> when (morePage) {
                             MorePage.Menu -> MoreScreen(
@@ -475,10 +480,32 @@ private fun ChurchApp() {
                         },
                     )
                 }
+                editingProject?.let { projectToEdit ->
+                    ProjectEditDialog(
+                        project = projectToEdit,
+                        error = writeError,
+                        onDismiss = { editingProject = null },
+                        onSubmit = { draft ->
+                            coroutineScope.launch {
+                                writeError = null
+                                try {
+                                    SupabaseBackend.updateProjectAsPastor(member, draft)
+                                    churchSnapshot = SupabaseBackend.loadChurchSnapshot(member)
+                                    editingProject = null
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Exception) {
+                                    writeError = "No se pudo actualizar el proyecto: ${error.message ?: "verifica los datos y tus permisos."}"
+                                }
+                            }
+                        },
+                    )
+                }
                 if (showActivityForm) {
                     ActivityFormDialog(
                         ministries = moduleMinistries,
                         members = moduleMembers,
+                        projects = moduleProjects,
                         currentMember = member,
                         error = writeError,
                         onDismiss = { showActivityForm = false },
@@ -753,6 +780,7 @@ private fun DashboardScreen(
     activities: List<ChurchActivity>,
     ministries: List<Ministry>,
     members: List<Member>,
+    projects: List<ChurchProject>,
 ) {
     val today = LocalDate.now()
     val upcoming = remember(activities) {
@@ -801,7 +829,7 @@ private fun DashboardScreen(
             item { EmptyCard("Sin actividades próximas", "Cuando se programen actividades, aparecerán aquí.") }
         } else {
             items(upcoming, key = { it.id }) { activity ->
-                ActivityCard(activity, ministries)
+                ActivityCard(activity, ministries, members, projects)
             }
         }
         item {
@@ -850,8 +878,16 @@ private fun SectionHeading(title: String, action: String?) {
 }
 
 @Composable
-private fun ActivityCard(activity: ChurchActivity, ministries: List<Ministry>) {
+private fun ActivityCard(
+    activity: ChurchActivity,
+    ministries: List<Ministry>,
+    members: List<Member> = emptyList(),
+    projects: List<ChurchProject> = emptyList(),
+) {
     val ministry = ministries.find { it.id == activity.ministryId }
+    val project = projects.find { it.id == activity.projectId }
+    val preacher = members.find { it.id == activity.preacherId }
+    val worshipLeader = members.find { it.id == activity.worshipLeaderId }
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(16.dp),
@@ -865,9 +901,36 @@ private fun ActivityCard(activity: ChurchActivity, ministries: List<Ministry>) {
                 ) { Text(ministry?.icon ?: "▣", color = ministry?.color?.toColor() ?: Brand, fontSize = 20.sp) }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(activity.title, color = Color(0xFF1C1917), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(activity.title, color = Color(0xFF1C1917), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        if (activity.category.isNotBlank() && activity.kind != "Tarea") {
+                            Text(
+                                activity.category,
+                                color = BrandLight,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(0xFFF8EEF0.toColor())
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(4.dp))
                     Text("${activity.date.toCalendarLabel()} · ${activity.time} · ${activity.location}", color = TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (project != null) {
+                Spacer(Modifier.height(6.dp))
+                Text("Proyecto: ${project.name}", color = Brand, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
+            if (preacher != null || worshipLeader != null) {
+                Spacer(Modifier.height(4.dp))
+                if (preacher != null) {
+                    Text("Predicador: ${preacher.name}", color = TextMuted, fontSize = 11.sp)
+                }
+                if (worshipLeader != null) {
+                    Text("Director de alabanza: ${worshipLeader.name}", color = TextMuted, fontSize = 11.sp)
                 }
             }
             if (activity.kind == "Tarea") {
@@ -894,6 +957,8 @@ private fun CalendarScreen(
     padding: PaddingValues,
     activities: List<ChurchActivity>,
     ministries: List<Ministry>,
+    members: List<Member>,
+    projects: List<ChurchProject>,
     canManage: Boolean,
     onCreateActivity: () -> Unit,
     onCreateTask: () -> Unit,
@@ -973,7 +1038,7 @@ private fun CalendarScreen(
                     Spacer(Modifier.width(12.dp))
                     Box(Modifier.weight(1f)) {
                         Column {
-                            ActivityCard(activity, ministries)
+                            ActivityCard(activity, ministries, members, projects)
                             if (
                                 activity.isAssignedToCurrentUser &&
                                 activity.kind == "Tarea" &&
@@ -1101,6 +1166,7 @@ private fun ProjectsScreen(
     members: List<Member>,
     canCreateProjects: Boolean,
     onCreateProject: () -> Unit,
+    onEditProject: (ChurchProject) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
@@ -1171,6 +1237,15 @@ private fun ProjectsScreen(
                         }
                         project.budgetExecuted?.let {
                             Text("Presupuesto ejecutado: ${it.toCLPCurrency()}", color = TextMuted, fontSize = 12.sp)
+                        }
+                    }
+                    if (canCreateProjects) {
+                        Spacer(Modifier.height(14.dp))
+                        OutlinedButton(
+                            onClick = { onEditProject(project) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Actualizar estado / presupuesto", color = Brand, fontSize = 12.sp)
                         }
                     }
                 }
@@ -1586,9 +1661,86 @@ private fun ProjectFormDialog(
 }
 
 @Composable
+private fun ProjectEditDialog(
+    project: ChurchProject,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (ProjectUpdateDraft) -> Unit,
+) {
+    val statuses = listOf(
+        "Por hacer" to "Por hacer",
+        "En curso" to "En curso",
+        "En pausa" to "En pausa",
+        "Completada" to "Completada",
+    )
+    var selectedStatus by remember { mutableStateOf(project.status) }
+    var budgetExecutedText by remember {
+        mutableStateOf(project.budgetExecuted?.toString() ?: "")
+    }
+    val executedBudgetValid = budgetExecutedText.isBlank() ||
+        budgetExecutedText.toLongOrNull()?.let { it >= 0 } == true
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Actualizar proyecto", color = Brand) },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(project.name, color = Brand, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Text("Estado", color = TextMuted, fontSize = 12.sp)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    statuses.forEach { (value, label) ->
+                        OutlinedButton(onClick = { selectedStatus = value }) {
+                            Text(if (selectedStatus == value) "✓ $label" else label)
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = budgetExecutedText,
+                    onValueChange = { budgetExecutedText = it },
+                    label = { Text("Presupuesto ejecutado en pesos") },
+                    singleLine = true,
+                )
+                if (!executedBudgetValid) {
+                    Text("El presupuesto debe ser un número entero no negativo.", color = Color(0xFFB42318), fontSize = 11.sp)
+                }
+                if (error != null) {
+                    Text(error, color = Color(0xFFB42318), fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = executedBudgetValid,
+                onClick = {
+                    onSubmit(
+                        ProjectUpdateDraft(
+                            id = project.id,
+                            status = selectedStatus,
+                            budgetExecuted = budgetExecutedText.takeIf { it.isNotBlank() }?.toLongOrNull(),
+                        ),
+                    )
+                },
+            ) {
+                Text("Actualizar", color = Brand)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar", color = TextMuted) }
+        },
+    )
+}
+
+@Composable
 private fun ActivityFormDialog(
     ministries: List<Ministry>,
     members: List<Member>,
+    projects: List<ChurchProject>,
     currentMember: Member,
     error: String?,
     onDismiss: () -> Unit,
@@ -1602,6 +1754,11 @@ private fun ActivityFormDialog(
     var location by remember { mutableStateOf("") }
     var ministryId by remember { mutableStateOf(currentMember.ministryId) }
     var kind by remember { mutableStateOf("activity") }
+    val categories = listOf("Culto", "Ensayo", "Aseo", "Reunión de líderes", "Libre")
+    var category by remember { mutableStateOf("Libre") }
+    var selectedProjectId by remember { mutableStateOf<String?>(null) }
+    var preacherId by remember { mutableStateOf<String?>(null) }
+    var worshipLeaderId by remember { mutableStateOf<String?>(null) }
     val assignees = remember { mutableStateOf(setOf(currentMember.id)) }
     val ministryLeader = currentMember.role == "Líder de ministerio"
     val managedMinistryIds = ministries
@@ -1619,12 +1776,15 @@ private fun ActivityFormDialog(
     } else {
         members.filter(Member::active)
     }
+    val isCulto = kind == "activity" && category == "Culto"
     val scheduleValid = runCatching {
         LocalDate.parse(date)
         LocalTime.parse(startTime).isBefore(LocalTime.parse(endTime))
     }.getOrDefault(false)
+    val cultoValid = !isCulto || (preacherId != null && worshipLeaderId != null)
     val canSubmit = title.isNotBlank() &&
         scheduleValid &&
+        cultoValid &&
         (ministryId == null || ministries.any { it.id == ministryId }) &&
         (!ministryLeader || ministryId in managedMinistryIds) &&
         (kind == "meeting" ||
@@ -1647,6 +1807,59 @@ private fun ActivityFormDialog(
                     listOf("activity" to "Actividad", "meeting" to "Reunión").forEach { (value, label) ->
                         OutlinedButton(onClick = { kind = value }) {
                             Text(if (kind == value) "✓ $label" else label)
+                        }
+                    }
+                }
+                if (kind == "activity") {
+                    Text("Categoría", color = TextMuted, fontSize = 12.sp)
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        categories.forEach { cat ->
+                            OutlinedButton(onClick = { category = cat }) {
+                                Text(if (category == cat) "✓ $cat" else cat)
+                            }
+                        }
+                    }
+                    if (category == "Culto") {
+                        Text("Predicador (obligatorio)", color = TextMuted, fontSize = 12.sp)
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            availableMembers.forEach { candidate ->
+                                OutlinedButton(onClick = { preacherId = candidate.id }) {
+                                    Text(if (preacherId == candidate.id) "✓ ${candidate.name}" else candidate.name)
+                                }
+                            }
+                        }
+                        Text("Director de alabanza (obligatorio)", color = TextMuted, fontSize = 12.sp)
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            availableMembers.forEach { candidate ->
+                                OutlinedButton(onClick = { worshipLeaderId = candidate.id }) {
+                                    Text(if (worshipLeaderId == candidate.id) "✓ ${candidate.name}" else candidate.name)
+                                }
+                            }
+                        }
+                    }
+                    if (projects.isNotEmpty()) {
+                        Text("Proyecto asociado (opcional)", color = TextMuted, fontSize = 12.sp)
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            OutlinedButton(onClick = { selectedProjectId = null }) {
+                                Text(if (selectedProjectId == null) "✓ Ninguno" else "Ninguno")
+                            }
+                            projects.forEach { prj ->
+                                OutlinedButton(onClick = { selectedProjectId = prj.id }) {
+                                    Text(if (selectedProjectId == prj.id) "✓ ${prj.name}" else prj.name)
+                                }
+                            }
                         }
                     }
                 }
@@ -1699,6 +1912,7 @@ private fun ActivityFormDialog(
                     )
                 }
                 if (!scheduleValid) Text("Usa fechas y horas válidas; el término debe ser posterior al inicio.", color = Color(0xFFB42318), fontSize = 11.sp)
+                if (isCulto && !cultoValid) Text("Para un Culto, debes seleccionar un predicador y un director de alabanza.", color = Color(0xFFB42318), fontSize = 11.sp)
                 if (error != null) Text(error, color = Color(0xFFB42318), fontSize = 12.sp)
             }
         },
@@ -1716,6 +1930,10 @@ private fun ActivityFormDialog(
                             ministryId = ministryId,
                             location = location.trim(),
                             kind = kind,
+                            category = if (kind == "activity") category else "Libre",
+                            projectId = if (kind == "activity") selectedProjectId else null,
+                            worshipLeaderId = if (isCulto) worshipLeaderId else null,
+                            preacherId = if (isCulto) preacherId else null,
                             assigneeIds = assignees.value.toList(),
                         ),
                     )
