@@ -429,7 +429,7 @@ object SupabaseBackend {
 }
 
 private val MINISTRY_COLORS = listOf(
-    0xFF7C2D3E,
+    0xFF2563EB,
     0xFF1E3A5F,
     0xFF5A7A2B,
     0xFF9A6E1A,

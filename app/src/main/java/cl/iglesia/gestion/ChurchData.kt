@@ -137,7 +137,7 @@ object ChurchData {
     )
 
     val ministries = listOf(
-        Ministry("alabanza", "Ministerio de Alabanza", "♫", 0xFF7C2D3E, "u2", "Dirigir la adoración y la música en cultos y eventos especiales."),
+        Ministry("alabanza", "Ministerio de Alabanza", "♫", 0xFF2563EB, "u2", "Dirigir la adoración y la música en cultos y eventos especiales."),
         Ministry("juventud", "Ministerio de Juventud", "⚡", 0xFF1E3A5F, "u3", "Discipulado, actividades y formación espiritual para jóvenes."),
         Ministry("aseo", "Ministerio de Aseo", "✦", 0xFF5A7A2B, "u4", "Mantenimiento y limpieza de las instalaciones de la iglesia."),
     )

@@ -110,7 +110,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.rgb(74, 16, 32)),
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.rgb(30, 58, 138)),
             navigationBarStyle = SystemBarStyle.light(
                 android.graphics.Color.rgb(250, 248, 245),
                 android.graphics.Color.rgb(250, 248, 245),
@@ -279,7 +279,7 @@ private fun ChurchApp() {
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = Brand,
                                     selectedTextColor = Brand,
-                                    indicatorColor = 0xFFF8EEF0.toColor(),
+                                    indicatorColor = 0xFFEFF6FF.toColor(),
                                     unselectedIconColor = TextMuted,
                                     unselectedTextColor = TextMuted,
                                 ),
@@ -911,7 +911,7 @@ private fun ActivityCard(
                                 fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(0xFFF8EEF0.toColor())
+                                    .background(0xFFEFF6FF.toColor())
                                     .padding(horizontal = 6.dp, vertical = 2.dp),
                             )
                         }
@@ -1291,7 +1291,7 @@ private fun MoreOption(icon: ImageVector, title: String, subtitle: String, onCli
         border = androidx.compose.foundation.BorderStroke(1.dp, BorderWarm),
     ) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(0xFFF8EEF0.toColor()), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(0xFFEFF6FF.toColor()), contentAlignment = Alignment.Center) {
                 Icon(icon, contentDescription = null, tint = BrandLight)
             }
             Spacer(Modifier.width(12.dp))
@@ -1351,7 +1351,7 @@ private fun WorshipScreen(
         songs.forEachIndexed { index, song ->
             Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, BorderWarm)) {
                 Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(36.dp).clip(CircleShape).background(0xFFF8EEF0.toColor()), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(36.dp).clip(CircleShape).background(0xFFEFF6FF.toColor()), contentAlignment = Alignment.Center) {
                         Text((index + 1).toString(), color = BrandLight, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                     Spacer(Modifier.width(12.dp))
