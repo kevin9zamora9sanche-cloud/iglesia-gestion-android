@@ -1,6 +1,7 @@
 package cl.iglesia.gestion
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,7 +65,7 @@ fun MinistriesScreen(
     members: List<Member>,
     submitting: Boolean,
     onCreateMinistry: () -> Unit,
-    onAddMember: (ministryId: String, userId: String, leader: Boolean) -> Unit,
+    onAddMember: (Ministry) -> Unit,
     onSetLeader: (ministryId: String, userId: String, leader: Boolean) -> Unit,
     onRemoveMember: (ministryId: String, userId: String) -> Unit,
 ) {
@@ -141,16 +142,13 @@ private fun MinistryDetail(
     members: List<Member>,
     submitting: Boolean,
     onBack: () -> Unit,
-    onAddMember: (String, String, Boolean) -> Unit,
+    onAddMember: (Ministry) -> Unit,
     onSetLeader: (String, String, Boolean) -> Unit,
     onRemoveMember: (String, String) -> Unit,
 ) {
     val ministryMembers = members.filter { ministry.id in it.ministryIds }
     val candidates = members.filter { it.active && ministry.id !in it.ministryIds }
-    var adding by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Member?>(null) }
-    var newMemberId by remember { mutableStateOf<String?>(null) }
-    var newMemberLeader by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -175,11 +173,7 @@ private fun MinistryDetail(
             SectionHeader(
                 "Integrantes",
                 actionLabel = if (member.isPastor && candidates.isNotEmpty()) "Agregar" else null,
-                onAction = {
-                    newMemberId = null
-                    newMemberLeader = false
-                    adding = true
-                },
+                onAction = { onAddMember(ministry) },
             )
         }
         if (ministryMembers.isEmpty()) {
@@ -233,35 +227,6 @@ private fun MinistryDetail(
         }
     }
 
-    if (adding) {
-        FullScreenForm(
-            title = "Agregar a ${ministry.shortName}",
-            confirmLabel = "Agregar integrante",
-            canConfirm = newMemberId != null,
-            submitting = submitting,
-            error = null,
-            onDismiss = { adding = false },
-            onConfirm = {
-                newMemberId?.let { onAddMember(ministry.id, it, newMemberLeader) }
-                adding = false
-            },
-        ) {
-            FieldLabel("Persona", required = true)
-            MemberPicker(
-                members = candidates,
-                selectedIds = setOfNotNull(newMemberId),
-                multiSelect = false,
-                onChange = { newMemberId = it.firstOrNull() },
-                emptyMessage = "Todas las personas activas ya pertenecen a este ministerio.",
-            )
-            SwitchRow(
-                label = "Líder del ministerio",
-                checked = newMemberLeader,
-                onCheckedChange = { newMemberLeader = it },
-                supporting = "Podrá crear actividades y asignar tareas si su rol es Líder de ministerio.",
-            )
-        }
-    }
     removing?.let { person ->
         ConfirmDialog(
             title = "¿Retirar a ${person.firstName}?",
@@ -338,6 +303,7 @@ fun ProjectsScreen(
                     project = project,
                     leader = members.find { it.id == project.leaderId },
                     activities = activities.filter { it.projectId == project.id && it.kind == ItemKind.Activity },
+                    tasks = activities.filter { it.isTask && it.projectId == project.id },
                     expanded = expandedId == project.id,
                     canManage = canManage,
                     onToggle = { expandedId = if (expandedId == project.id) null else project.id },
@@ -364,6 +330,7 @@ private fun ProjectCard(
     project: ChurchProject,
     leader: Member?,
     activities: List<ChurchActivity>,
+    tasks: List<ChurchActivity>,
     expanded: Boolean,
     canManage: Boolean,
     onToggle: () -> Unit,
@@ -371,6 +338,16 @@ private fun ProjectCard(
     onOpenActivity: (ChurchActivity) -> Unit,
 ) {
     val today = LocalDate.now()
+    // Misma regla que el avance del proyecto: sin tareas vale 100 % solo si está completada.
+    fun activityProgress(activity: ChurchActivity): Int {
+        val childTasks = tasks.filter { it.parentActivityId == activity.id }
+        return if (childTasks.isEmpty()) {
+            if (activity.status == "completed") 100 else 0
+        } else {
+            childTasks.count { it.status == "completed" } * 100 / childTasks.size
+        }
+    }
+    val completedActivities = activities.count { activityProgress(it) == 100 }
     val finished = project.status == "completed" || project.status == "cancelled"
     val overdue = !finished && project.dueDate.isBefore(today)
     AppCard(onClick = onToggle) {
@@ -396,25 +373,34 @@ private fun ProjectCard(
             )
         }
         Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth()) {
-            Text("Avance", style = MaterialTheme.typography.labelMedium, color = TextSecondary, modifier = Modifier.weight(1f))
-            Text("${project.progress}%", style = MaterialTheme.typography.labelLarge, color = Brand)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            Text("Avance del proyecto", style = MaterialTheme.typography.labelLarge, color = TextSecondary, modifier = Modifier.weight(1f))
+            Text(
+                "${project.progress}%",
+                style = MaterialTheme.typography.headlineSmall,
+                color = if (project.progress == 100) Success else Brand,
+            )
         }
         Spacer(Modifier.height(6.dp))
         LinearProgressIndicator(
             progress = { project.progress / 100f },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(8.dp)
+                .height(12.dp)
                 .clip(CircleShape)
-                .semantics { contentDescription = "Avance ${project.progress} por ciento" },
+                .semantics { contentDescription = "Avance del proyecto: ${project.progress} por ciento" },
             color = if (project.progress == 100) Success else BrandLight,
             trackColor = MutedSurface,
+            gapSize = 0.dp,
             drawStopIndicator = {},
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
-            if (activities.isEmpty()) "Sin actividades asociadas: avance 0 %" else "Calculado de ${activities.size} actividad(es)",
+            if (activities.isEmpty()) {
+                "Sin actividades asociadas todavía: avance 0 %."
+            } else {
+                "$completedActivities de ${activities.size} actividad(es) completas · se actualiza al completar actividades y tareas."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = TextMuted,
         )
@@ -457,17 +443,35 @@ private fun ProjectCard(
                     Text("Asocia actividades a este proyecto desde la Agenda.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                 }
                 activities.forEach { activity ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { onOpenActivity(activity) }, modifier = Modifier.weight(1f)) {
+                    val value = activityProgress(activity)
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.small)
+                            .clickable { onOpenActivity(activity) }
+                            .heightIn(min = 48.dp)
+                            .padding(vertical = 6.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 "${activity.date.shortLabel()} · ${activity.title}",
+                                style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.weight(1f),
                                 color = TextPrimary,
                             )
+                            Text("$value%", style = MaterialTheme.typography.labelLarge, color = BrandLight)
                         }
-                        StatusPill(activity.status)
+                        Spacer(Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { value / 100f },
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
+                            color = if (value == 100) Success else BrandLight,
+                            trackColor = MutedSurface,
+                            gapSize = 0.dp,
+                            drawStopIndicator = {},
+                        )
                     }
                 }
                 if (canManage) {

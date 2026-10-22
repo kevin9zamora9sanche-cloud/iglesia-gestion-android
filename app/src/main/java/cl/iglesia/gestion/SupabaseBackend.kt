@@ -9,7 +9,14 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.rpc
+import io.github.jan.supabase.functions.Functions
+import io.github.jan.supabase.functions.functions
 import io.github.jan.supabase.storage.Storage
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.isSuccess
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import io.github.jan.supabase.storage.storage
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
@@ -42,6 +49,7 @@ object SupabaseBackend {
             install(Auth)
             install(Postgrest)
             install(Storage)
+            install(Functions)
         }
     }
 
@@ -99,6 +107,19 @@ object SupabaseBackend {
             .select { order("full_name", Order.ASCENDING) }
             .decodeList<SupabaseProfile>()
         val membershipsByUser = membershipRows.groupBy(SupabaseMembership::userId)
+        // Correo y último acceso solo para el Pastor; requiere la migración 20261023100000.
+        val accounts = if (currentMember.isPastor) {
+            try {
+                client.postgrest.rpc("admin_list_users").decodeList<SupabaseAccount>().associateBy(SupabaseAccount::id)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                android.util.Log.w("SupabaseBackend", "Directorio de cuentas no disponible", error)
+                emptyMap()
+            }
+        } else {
+            emptyMap()
+        }
         val members = memberRows.map { profile ->
             val name = profile.fullName.ifBlank {
                 if (profile.id == currentMember.id) currentMember.name else "Usuario"
@@ -110,13 +131,14 @@ object SupabaseBackend {
                 name = name,
                 role = role,
                 initials = name.initials(),
-                email = if (profile.id == currentMember.id) currentMember.email else "",
+                email = if (profile.id == currentMember.id) currentMember.email else accounts[profile.id]?.email.orEmpty(),
                 active = profile.isActive,
                 phone = profile.phone.orEmpty(),
                 ministryIds = memberships.map(SupabaseMembership::ministryId),
                 ledMinistryIds = memberships
                     .filter { it.isLeader && role == Roles.MINISTRY_LEADER }
                     .map(SupabaseMembership::ministryId),
+                lastSignIn = accounts[profile.id]?.lastSignInAt?.let(::parseTimestamp),
             )
         }
         val ministries = ministryRows.mapIndexed { index, ministry ->
@@ -161,10 +183,14 @@ object SupabaseBackend {
                     leaderId = project.leaderId,
                     startDate = LocalDate.parse(project.startDate),
                     dueDate = LocalDate.parse(project.dueDate),
-                    progress = calculateProjectProgress(
-                        activitiesByProject[project.id].orEmpty(),
-                        tasksByActivity,
-                    ),
+                    // El Pastor ve todas las actividades y tareas, así que el cálculo
+                    // local es exacto e inmediato. Los demás ven solo una parte por RLS:
+                    // para ellos se usa el avance que la base recalcula con todo.
+                    progress = if (currentMember.isPastor) {
+                        calculateProjectProgress(activitiesByProject[project.id].orEmpty(), tasksByActivity)
+                    } else {
+                        project.progress.coerceIn(0, 100)
+                    },
                     status = project.status,
                     budgetEstimated = project.budget?.toLong(),
                     budgetExecuted = project.budgetExecuted?.toLong(),
@@ -680,6 +706,107 @@ object SupabaseBackend {
         }
     }
 
+    /** Cambia los responsables de una actividad agregando y quitando solo la diferencia. */
+    suspend fun setActivityAssignees(currentMember: Member, activity: ChurchActivity, desiredIds: Set<String>) {
+        require(desiredIds.isNotEmpty()) { "La actividad debe tener al menos un responsable." }
+        val current = activity.assigneeIds.toSet()
+        val toAdd = desiredIds - current
+        val toRemove = current - desiredIds
+        if (toAdd.isNotEmpty()) {
+            client.from("activity_assignments").insert(
+                toAdd.map { ActivityAssignmentInsert(activity.id, it, currentMember.id) },
+            )
+        }
+        toRemove.forEach { userId ->
+            client.from("activity_assignments").delete {
+                filter {
+                    eq("activity_id", activity.id)
+                    eq("user_id", userId)
+                }
+            }
+        }
+    }
+
+    suspend fun reassignTask(taskId: String, assigneeId: String) {
+        client.from("tasks").update(TaskAssigneeUpdate(assigneeId)) {
+            filter { eq("id", taskId) }
+        }
+    }
+
+    suspend fun createUserAccount(draft: NewUserDraft): String {
+        val response = invokeAdminUsers(
+            buildJsonObject {
+                put("action", "create")
+                put("email", draft.email.trim())
+                put("full_name", draft.fullName.trim())
+                put("phone", draft.phone.trim())
+                put("role", draft.role.toDatabaseRole())
+                put("password", draft.password)
+                putJsonArray("memberships") {
+                    draft.memberships.forEach { (ministryId, isLeader) ->
+                        addJsonObject {
+                            put("ministry_id", ministryId)
+                            put("is_leader", isLeader)
+                        }
+                    }
+                }
+            },
+        )
+        return response["id"]?.jsonPrimitive?.content.orEmpty()
+    }
+
+    suspend fun setTemporaryPassword(userId: String, password: String) {
+        invokeAdminUsers(
+            buildJsonObject {
+                put("action", "set_password")
+                put("user_id", userId)
+                put("password", password)
+            },
+        )
+    }
+
+    suspend fun sendPasswordReset(email: String) {
+        client.auth.resetPasswordForEmail(email.trim())
+    }
+
+    suspend fun changeOwnPassword(password: String) {
+        passwordProblem(password)?.let { throw UserFacingException(it) }
+        client.auth.updateUser { this.password = password }
+    }
+
+    /** Llama a la Edge Function admin-users y traduce su error a un mensaje legible. */
+    private suspend fun invokeAdminUsers(body: JsonObject): JsonObject {
+        val response = try {
+            client.functions.invoke("admin-users", body)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            val serverMessage = Regex("\"error\"\\s*:\\s*\"([^\"]+)\"").find(error.message.orEmpty())?.groupValues?.get(1)
+            throw UserFacingException(
+                serverMessage ?: "No se pudo contactar el servicio de cuentas. Verifica que la función admin-users esté desplegada.",
+            )
+        }
+        val text = response.bodyAsText()
+        val json = runCatching { Json.parseToJsonElement(text) as JsonObject }.getOrNull() ?: JsonObject(emptyMap())
+        if (!response.status.isSuccess()) {
+            throw UserFacingException(json["error"]?.jsonPrimitive?.content ?: "El servicio de cuentas rechazó la solicitud.")
+        }
+        return json
+    }
+
+    /** Ajusta las membresías del perfil a las deseadas (ministryId -> es líder). */
+    suspend fun syncMemberships(target: Member, ministries: List<Ministry>, desired: Map<String, Boolean>) {
+        val currentLeader = ministries.filter { target.id in it.leaderIds }.mapTo(mutableSetOf(), Ministry::id)
+        val current = target.ministryIds.toSet()
+        desired.forEach { (ministryId, isLeader) ->
+            when {
+                ministryId !in current -> addMembership(ministryId, target.id, isLeader)
+                (ministryId in currentLeader) != isLeader -> setMembershipLeader(ministryId, target.id, isLeader)
+            }
+        }
+        (current - desired.keys).forEach { removeMembership(it, target.id) }
+    }
+
     suspend fun updateProfileAsPastor(
         target: Member,
         fullName: String,
@@ -825,6 +952,12 @@ private fun String.isPublicClientKey(): Boolean {
     }
 }
 
+private fun String.toDatabaseRole(): String = when (this) {
+    Roles.PASTOR -> "pastor"
+    Roles.MINISTRY_LEADER -> "ministry_leader"
+    else -> "leader"
+}
+
 private fun String.toRoleLabel(): String = when (this) {
     "pastor" -> Roles.PASTOR
     "ministry_leader" -> Roles.MINISTRY_LEADER
@@ -867,7 +1000,20 @@ private data class SupabaseProject(
     @SerialName("due_date") val dueDate: String,
     val budget: Double? = null,
     @SerialName("budget_executed") val budgetExecuted: Double? = null,
+    val progress: Int = 0,
     val status: String,
+)
+
+@Serializable
+private data class SupabaseAccount(
+    val id: String,
+    val email: String? = null,
+    @SerialName("last_sign_in_at") val lastSignInAt: String? = null,
+)
+
+@Serializable
+private data class TaskAssigneeUpdate(
+    @SerialName("assignee_id") val assigneeId: String,
 )
 
 @Serializable

@@ -111,6 +111,10 @@ sealed interface FormRequest {
     data class Profile(val member: Member) : FormRequest
     data class Repertoire(val cultoId: String) : FormRequest
     data object Record : FormRequest
+    data object NewUser : FormRequest
+    data object ChangePassword : FormRequest
+    data class EditAssignees(val itemId: String) : FormRequest
+    data class AddMember(val ministryId: String) : FormRequest
 }
 
 /** Permisos derivados del rol; replican RLS para ocultar acciones no permitidas. */
@@ -433,11 +437,7 @@ private fun ChurchApp() {
                                     members = members,
                                     submitting = submitting,
                                     onCreateMinistry = { openFormRequest(FormRequest.NewMinistry) },
-                                    onAddMember = { ministryId, userId, leader ->
-                                        perform("Integrante agregado", closeForm = false) {
-                                            SupabaseBackend.addMembership(ministryId, userId, leader)
-                                        }
-                                    },
+                                    onAddMember = { ministry -> openFormRequest(FormRequest.AddMember(ministry.id)) },
                                     onSetLeader = { ministryId, userId, leader ->
                                         perform(if (leader) "Marcado como líder" else "Liderazgo retirado", closeForm = false) {
                                             SupabaseBackend.setMembershipLeader(ministryId, userId, leader)
@@ -467,6 +467,7 @@ private fun ChurchApp() {
                                         onRecords = { morePage = MorePage.Records },
                                         onPersonnel = { morePage = MorePage.Personnel },
                                         onNotifications = { morePage = MorePage.Notifications },
+                                        onChangePassword = { openFormRequest(FormRequest.ChangePassword) },
                                         onLogout = { confirmLogout = true },
                                     )
                                     MorePage.Worship -> WorshipScreen(
@@ -508,6 +509,7 @@ private fun ChurchApp() {
                                         ministries = ministries,
                                         onBack = { morePage = MorePage.Menu },
                                         onEdit = { openFormRequest(FormRequest.Profile(it)) },
+                                        onCreate = { openFormRequest(FormRequest.NewUser) },
                                     )
                                     MorePage.Notifications -> NotificationsScreen(
                                         notifications = notifications,
@@ -562,6 +564,10 @@ private fun ChurchApp() {
                         onEditRepertoire = {
                             detailItemId = null
                             openFormRequest(FormRequest.Repertoire(item.id))
+                        },
+                        onEditAssignees = {
+                            detailItemId = null
+                            openFormRequest(FormRequest.EditAssignees(item.id))
                         },
                         onChangeStatus = { status ->
                             perform("Estado actualizado", closeForm = false) {
@@ -649,14 +655,17 @@ private fun ChurchApp() {
                 )
                 is FormRequest.Profile -> ProfileForm(
                     target = request.member,
+                    ministries = ministries,
+                    isSelf = request.member.id == member.id,
                     submitting = submitting,
                     error = formError,
                     onDismiss = { openForm = null },
-                    onSubmit = { name, phone, role, active ->
-                        perform("Perfil actualizado") {
-                            SupabaseBackend.updateProfileAsPastor(request.member, name, phone, role, active)
+                    onSubmit = { draft ->
+                        perform("Cuenta actualizada") {
+                            SupabaseBackend.updateProfileAsPastor(request.member, draft.fullName, draft.phone, draft.role, draft.active)
+                            SupabaseBackend.syncMemberships(request.member, ministries, draft.memberships)
                             if (request.member.id == member.id) {
-                                if (!active) {
+                                if (!draft.active) {
                                     SupabaseBackend.client.auth.signOut()
                                 } else {
                                     currentMember = SupabaseBackend.loadCurrentMember()
@@ -664,7 +673,85 @@ private fun ChurchApp() {
                             }
                         }
                     },
+                    onSendReset = {
+                        perform("Correo de restablecimiento enviado a ${request.member.email}", closeForm = false) {
+                            SupabaseBackend.sendPasswordReset(request.member.email)
+                        }
+                    },
+                    onSetPassword = { password ->
+                        perform("Contraseña temporal asignada", closeForm = false) {
+                            SupabaseBackend.setTemporaryPassword(request.member.id, password)
+                        }
+                    },
                 )
+                FormRequest.NewUser -> NewUserForm(
+                    ministries = ministries,
+                    submitting = submitting,
+                    error = formError,
+                    onDismiss = { openForm = null },
+                    onSubmit = { draft ->
+                        perform("Cuenta creada para ${draft.email.trim()}") { SupabaseBackend.createUserAccount(draft) }
+                    },
+                )
+                FormRequest.ChangePassword -> ChangePasswordForm(
+                    submitting = submitting,
+                    error = formError,
+                    onDismiss = { openForm = null },
+                    onSubmit = { password ->
+                        perform("Tu contraseña se actualizó") { SupabaseBackend.changeOwnPassword(password) }
+                    },
+                )
+                is FormRequest.AddMember -> {
+                    val ministry = ministries.firstOrNull { it.id == request.ministryId }
+                    if (ministry == null) {
+                        LaunchedEffect(request) { openForm = null }
+                    } else {
+                        AddMemberForm(
+                            ministry = ministry,
+                            candidates = members.filter { it.active && ministry.id !in it.ministryIds },
+                            submitting = submitting,
+                            error = formError,
+                            onDismiss = { openForm = null },
+                            onSubmit = { userId, leader ->
+                                perform("Integrante agregado") { SupabaseBackend.addMembership(ministry.id, userId, leader) }
+                            },
+                        )
+                    }
+                }
+                is FormRequest.EditAssignees -> {
+                    val item = activities.firstOrNull { it.id == request.itemId }
+                    if (item == null) {
+                        LaunchedEffect(request) { openForm = null }
+                    } else {
+                        // Elegibles según RLS: el Pastor asigna a cualquiera; el líder, a integrantes del ministerio.
+                        val eligible = members.filter {
+                            it.active && (member.isPastor || (item.ministryId != null && item.ministryId in it.ministryIds))
+                        }
+                        if (item.isTask) {
+                            ReassignTaskForm(
+                                task = item,
+                                eligible = eligible,
+                                submitting = submitting,
+                                error = formError,
+                                onDismiss = { openForm = null },
+                                onSubmit = { assigneeId ->
+                                    perform("Tarea reasignada") { SupabaseBackend.reassignTask(item.id, assigneeId) }
+                                },
+                            )
+                        } else {
+                            AssigneesForm(
+                                activity = item,
+                                eligible = eligible,
+                                submitting = submitting,
+                                error = formError,
+                                onDismiss = { openForm = null },
+                                onSubmit = { selected ->
+                                    perform("Responsables actualizados") { SupabaseBackend.setActivityAssignees(member, item, selected) }
+                                },
+                            )
+                        }
+                    }
+                }
                 FormRequest.Record -> RecordForm(
                     meetings = activities,
                     ministries = ministries,

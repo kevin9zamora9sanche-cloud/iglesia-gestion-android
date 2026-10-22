@@ -414,10 +414,11 @@ fun FullScreenForm(
     onConfirm: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = { if (!submitting) onDismiss() },
-        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false),
-    ) {
+    // Se dibuja como capa a pantalla completa dentro de la actividad (edge-to-edge) y no
+    // como Dialog: la ventana de un Dialog no recibe bien los insets y el botón inferior
+    // quedaba oculto tras la barra de navegación. Debe emitirse en la raíz de la app.
+    androidx.activity.compose.BackHandler { if (!submitting) onDismiss() }
+    Surface(Modifier.fillMaxSize(), color = AppBackground) {
         Scaffold(
             containerColor = AppBackground,
             topBar = {
@@ -428,7 +429,12 @@ fun FullScreenForm(
                             Icon(Icons.Outlined.Close, contentDescription = "Cerrar sin guardar")
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White),
+                    // Fondo institucional: la barra de estado usa íconos claros en toda la app.
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Brand,
+                        titleContentColor = Color.White,
+                        navigationIconContentColor = Color.White,
+                    ),
                 )
             },
             bottomBar = {

@@ -17,6 +17,8 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -117,6 +119,8 @@ fun ProjectForm(
         TextInput(name, { name = it }, "Nombre", required = true)
         TextInput(objective, { objective = it }, "Objetivo", required = true, singleLine = false, minLines = 2)
         TextInput(description, { description = it }, "Descripción", singleLine = false, minLines = 3)
+        FieldLabel("Responsable del proyecto", required = true)
+        MemberPicker(leaderOptions, setOf(leaderId), multiSelect = false, onChange = { leaderId = it.first() }, emptyMessage = "No hay personas activas visibles.")
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             DateField("Inicio *", startDate, { it?.let { startDate = it } }, Modifier.weight(1f))
             DateField("Fin estimado *", dueDate, { it?.let { dueDate = it } }, Modifier.weight(1f))
@@ -143,8 +147,6 @@ fun ProjectForm(
             keyboardType = KeyboardType.Number,
             supportingText = budgetExecuted.toLongOrNull()?.toCLPCurrency() ?: "Opcional",
         )
-        FieldLabel("Responsable", required = true)
-        MemberPicker(leaderOptions, setOf(leaderId), multiSelect = false, onChange = { leaderId = it.first() }, emptyMessage = "No hay personas activas visibles.")
     }
 }
 
@@ -289,6 +291,19 @@ fun ActivityForm(
             )
         }
 
+        FieldLabel("Responsables", required = true)
+        if (classification == Classification.Ministry && ministryId == null) {
+            Text("Elige primero el ministerio.", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+        } else {
+            MemberPicker(
+                eligible,
+                selectedAssignees,
+                multiSelect = true,
+                onChange = { assignees = it },
+                emptyMessage = "No hay integrantes activos en este ministerio para asignar.",
+            )
+        }
+
         DateField("Fecha *", date, { it?.let { date = it } })
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TimeField("Inicio", startTime, { startTime = it }, Modifier.weight(1f))
@@ -303,19 +318,6 @@ fun ActivityForm(
             MemberPicker(activeMembers, setOfNotNull(preacherId), multiSelect = false, onChange = { preacherId = it.firstOrNull() }, emptyMessage = "No hay personas visibles.")
             FieldLabel("Director de alabanza", required = true)
             MemberPicker(activeMembers, setOfNotNull(worshipLeaderId), multiSelect = false, onChange = { worshipLeaderId = it.firstOrNull() }, emptyMessage = "No hay personas visibles.")
-        }
-
-        FieldLabel("Responsables", required = true)
-        if (classification == Classification.Ministry && ministryId == null) {
-            Text("Elige primero el ministerio.", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
-        } else {
-            MemberPicker(
-                eligible,
-                selectedAssignees,
-                multiSelect = true,
-                onChange = { assignees = it },
-                emptyMessage = "No hay integrantes activos en este ministerio para asignar.",
-            )
         }
     }
 }
@@ -460,6 +462,12 @@ fun TaskForm(
         }
         TextInput(title, { title = it }, "Título", required = true)
         TextInput(instructions, { instructions = it }, "Instrucciones", required = true, singleLine = false, minLines = 3)
+        FieldLabel("Responsable", required = true)
+        if (parent == null) {
+            Text("Elige primero la actividad.", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+        } else {
+            MemberPicker(eligible, setOfNotNull(assigneeId), multiSelect = false, onChange = { assigneeId = it.firstOrNull() }, emptyMessage = "No hay integrantes activos del ministerio para asignar.")
+        }
         FieldLabel("Prioridad", required = true)
         ChoiceChips(listOf("high", "medium", "low"), priority, { it.toPriorityLabel() }, { priority = it })
         DateField("Fecha límite (opcional)", dueDate, { dueDate = it }, clearable = true)
@@ -468,12 +476,6 @@ fun TaskForm(
             Text("La tarea aparecerá en el calendario personal del responsable.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
         }
         TextInput(comments, { comments = it }, "Comentarios (opcional)", singleLine = false, minLines = 2)
-        FieldLabel("Responsable", required = true)
-        if (parent == null) {
-            Text("Elige primero la actividad.", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
-        } else {
-            MemberPicker(eligible, setOfNotNull(assigneeId), multiSelect = false, onChange = { assigneeId = it.firstOrNull() }, emptyMessage = "No hay integrantes activos del ministerio para asignar.")
-        }
     }
 }
 
@@ -543,41 +545,202 @@ fun MinistryForm(
     }
 }
 
+/** Ministerios de una persona: integrante sí/no y, si lo es, líder sí/no. */
 @Composable
-fun ProfileForm(
-    target: Member,
+private fun MembershipEditor(
+    ministries: List<Ministry>,
+    role: String,
+    value: Map<String, Boolean>,
+    onChange: (Map<String, Boolean>) -> Unit,
+) {
+    FieldLabel("Ministerios")
+    if (ministries.isEmpty()) {
+        Text("No hay ministerios creados.", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+        return
+    }
+    AppCard(contentPadding = 8.dp) {
+        ministries.forEachIndexed { index, ministry ->
+            if (index > 0) androidx.compose.material3.HorizontalDivider(color = CardBorder)
+            val isMember = ministry.id in value
+            SwitchRow(
+                label = ministry.name,
+                checked = isMember,
+                onCheckedChange = { checked -> onChange(if (checked) value + (ministry.id to false) else value - ministry.id) },
+            )
+            if (isMember) {
+                Row(Modifier.padding(start = 16.dp)) {
+                    SwitchRow(
+                        label = "Líder de este ministerio",
+                        checked = value[ministry.id] == true,
+                        onCheckedChange = { onChange(value + (ministry.id to it)) },
+                        supporting = if (role != Roles.MINISTRY_LEADER && value[ministry.id] == true) {
+                            "Solo podrá gestionarlo si su rol es Líder de ministerio."
+                        } else {
+                            null
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PasswordInput(value: String, onValueChange: (String) -> Unit, label: String, showProblem: Boolean = true) {
+    var visible by remember { mutableStateOf(false) }
+    val problem = if (showProblem && value.isNotEmpty()) passwordProblem(value) else null
+    androidx.compose.material3.OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("$label *") },
+        singleLine = true,
+        isError = problem != null,
+        supportingText = { Text(problem ?: "Mínimo 8 caracteres, con al menos una letra y un número.") },
+        visualTransformation = if (visible) {
+            androidx.compose.ui.text.input.VisualTransformation.None
+        } else {
+            androidx.compose.ui.text.input.PasswordVisualTransformation()
+        },
+        trailingIcon = {
+            IconButton(onClick = { visible = !visible }) {
+                Icon(
+                    if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                    contentDescription = if (visible) "Ocultar contraseña" else "Mostrar contraseña",
+                )
+            }
+        },
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Password),
+        shape = MaterialTheme.shapes.medium,
+    )
+}
+
+/** Contraseña temporal legible (sin caracteres ambiguos) que cumple la política. */
+private fun generateTemporaryPassword(): String {
+    val letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+    val digits = "23456789"
+    val random = java.security.SecureRandom()
+    val chars = MutableList(8) { letters[random.nextInt(letters.length)] } +
+        List(2) { digits[random.nextInt(digits.length)] }
+    return chars.shuffled(random).joinToString("")
+}
+
+@Composable
+fun NewUserForm(
+    ministries: List<Ministry>,
     submitting: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onSubmit: (name: String, phone: String, role: String, active: Boolean) -> Unit,
+    onSubmit: (NewUserDraft) -> Unit,
 ) {
+    var email by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf("") }
+    var phone by rememberSaveable { mutableStateOf("") }
+    var role by rememberSaveable { mutableStateOf(Roles.LEADER) }
+    var password by rememberSaveable { mutableStateOf(generateTemporaryPassword()) }
+    var memberships by remember { mutableStateOf(mapOf<String, Boolean>()) }
+    val emailValid = android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()
+    FullScreenForm(
+        title = "Nueva cuenta",
+        confirmLabel = "Crear cuenta",
+        canConfirm = emailValid && name.isNotBlank() && passwordProblem(password) == null,
+        submitting = submitting,
+        error = error,
+        onDismiss = onDismiss,
+        onConfirm = { onSubmit(NewUserDraft(email, name, phone, role, password, memberships)) },
+    ) {
+        MessageBanner(
+            "La cuenta queda activa de inmediato. Entrega la contraseña temporal en persona y pide que la cambie en Más › Cambiar mi contraseña.",
+            BannerTone.Info,
+        )
+        TextInput(name, { name = it }, "Nombre completo", required = true)
+        TextInput(
+            email,
+            { email = it.trim() },
+            "Correo electrónico",
+            required = true,
+            keyboardType = KeyboardType.Email,
+            isError = email.isNotBlank() && !emailValid,
+            supportingText = if (email.isNotBlank() && !emailValid) "Escribe un correo válido." else "Será su usuario para ingresar.",
+        )
+        TextInput(phone, { phone = it }, "Teléfono", keyboardType = KeyboardType.Phone)
+        FieldLabel("Rol", required = true)
+        ChoiceChips(Roles.all, role, { it }, { role = it })
+        PasswordInput(password, { password = it }, "Contraseña temporal")
+        TextButton(onClick = { password = generateTemporaryPassword() }) { Text("Generar otra contraseña") }
+        MembershipEditor(ministries, role, memberships) { memberships = it }
+    }
+}
+
+@Composable
+fun ProfileForm(
+    target: Member,
+    ministries: List<Ministry>,
+    isSelf: Boolean,
+    submitting: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (ProfileDraft) -> Unit,
+    onSendReset: () -> Unit,
+    onSetPassword: (String) -> Unit,
+) {
+    val initialMemberships = target.ministryIds.associateWith { id -> ministries.any { it.id == id && target.id in it.leaderIds } }
     var name by rememberSaveable { mutableStateOf(target.name) }
     var phone by rememberSaveable { mutableStateOf(target.phone) }
     var role by rememberSaveable { mutableStateOf(target.role) }
     var active by rememberSaveable { mutableStateOf(target.active) }
+    var memberships by remember { mutableStateOf(initialMemberships) }
     var confirmDeactivate by remember { mutableStateOf(false) }
+    var confirmReset by remember { mutableStateOf(false) }
+    var settingPassword by remember { mutableStateOf(false) }
+    val draft = ProfileDraft(name, phone, role, active, memberships)
     FullScreenForm(
-        title = "Editar perfil",
+        title = "Administrar cuenta",
         confirmLabel = "Guardar cambios",
         canConfirm = name.isNotBlank(),
         submitting = submitting,
         error = error,
         onDismiss = onDismiss,
-        onConfirm = {
-            if (target.active && !active) confirmDeactivate = true else onSubmit(name, phone, role, active)
-        },
+        onConfirm = { if (target.active && !active) confirmDeactivate = true else onSubmit(draft) },
     ) {
-        if (target.email.isNotBlank()) Text(target.email, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Avatar(target.initials, size = 52.dp)
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(target.email.ifBlank { "Correo no disponible" }, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                Text(
+                    target.lastSignIn?.let { "Último acceso: ${it.relativeLabel()}" } ?: "Sin accesos registrados",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted,
+                )
+            }
+        }
         TextInput(name, { name = it }, "Nombre completo", required = true)
         TextInput(phone, { phone = it }, "Teléfono", keyboardType = KeyboardType.Phone)
         FieldLabel("Rol", required = true)
         ChoiceChips(Roles.all, role, { it }, { role = it })
+        if (isSelf && role != Roles.PASTOR) {
+            FieldError("Vas a quitarte el rol de Pastor. Debe quedar al menos otro Pastor activo.")
+        }
         SwitchRow(
             "Cuenta activa",
             active,
             { active = it },
-            supporting = "Una cuenta inactiva no puede iniciar sesión ni usar los módulos.",
+            supporting = "Una cuenta inactiva no puede usar la aplicación. Sus registros se conservan.",
         )
+        MembershipEditor(ministries, role, memberships) { memberships = it }
+
+        FieldLabel("Acceso")
+        OutlinedButton(
+            onClick = { confirmReset = true },
+            enabled = target.email.isNotBlank() && !submitting,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) { Text("Enviar correo para restablecer contraseña") }
+        OutlinedButton(
+            onClick = { settingPassword = true },
+            enabled = !submitting,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) { Text("Asignar contraseña temporal") }
     }
     if (confirmDeactivate) {
         ConfirmDialog(
@@ -588,9 +751,167 @@ fun ProfileForm(
             onDismiss = { confirmDeactivate = false },
             onConfirm = {
                 confirmDeactivate = false
-                onSubmit(name, phone, role, active)
+                onSubmit(draft)
             },
         )
+    }
+    if (confirmReset) {
+        ConfirmDialog(
+            title = "¿Enviar restablecimiento?",
+            message = "Se enviará a ${target.email} un enlace para crear una nueva contraseña.",
+            confirmLabel = "Enviar",
+            onDismiss = { confirmReset = false },
+            onConfirm = {
+                confirmReset = false
+                onSendReset()
+            },
+        )
+    }
+    if (settingPassword) {
+        var temporary by remember { mutableStateOf(generateTemporaryPassword()) }
+        AlertDialog(
+            onDismissRequest = { settingPassword = false },
+            title = { Text("Contraseña temporal") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Reemplaza la contraseña de ${target.firstName}. Entrégala en persona.", style = MaterialTheme.typography.bodyMedium)
+                    PasswordInput(temporary, { temporary = it }, "Nueva contraseña")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = passwordProblem(temporary) == null,
+                    onClick = {
+                        settingPassword = false
+                        onSetPassword(temporary)
+                    },
+                ) { Text("Asignar") }
+            },
+            dismissButton = { TextButton(onClick = { settingPassword = false }) { Text("Cancelar") } },
+        )
+    }
+}
+
+@Composable
+fun ChangePasswordForm(
+    submitting: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
+    val matches = password == confirmation
+    FullScreenForm(
+        title = "Cambiar mi contraseña",
+        confirmLabel = "Cambiar contraseña",
+        canConfirm = passwordProblem(password) == null && matches,
+        submitting = submitting,
+        error = error,
+        onDismiss = onDismiss,
+        onConfirm = { onSubmit(password) },
+    ) {
+        PasswordInput(password, { password = it }, "Nueva contraseña")
+        PasswordInput(confirmation, { confirmation = it }, "Repite la contraseña", showProblem = false)
+        if (confirmation.isNotEmpty() && !matches) FieldError("Las contraseñas no coinciden.")
+    }
+}
+
+@Composable
+fun AddMemberForm(
+    ministry: Ministry,
+    candidates: List<Member>,
+    submitting: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (userId: String, isLeader: Boolean) -> Unit,
+) {
+    var memberId by remember { mutableStateOf<String?>(null) }
+    var leader by remember { mutableStateOf(false) }
+    FullScreenForm(
+        title = "Agregar a ${ministry.shortName}",
+        confirmLabel = "Agregar integrante",
+        canConfirm = memberId != null,
+        submitting = submitting,
+        error = error,
+        onDismiss = onDismiss,
+        onConfirm = { memberId?.let { onSubmit(it, leader) } },
+    ) {
+        FieldLabel("Persona", required = true)
+        MemberPicker(
+            members = candidates,
+            selectedIds = setOfNotNull(memberId),
+            multiSelect = false,
+            onChange = { memberId = it.firstOrNull() },
+            emptyMessage = "Todas las personas activas ya pertenecen a este ministerio.",
+        )
+        SwitchRow(
+            label = "Líder del ministerio",
+            checked = leader,
+            onCheckedChange = { leader = it },
+            supporting = "Podrá crear actividades y asignar tareas si su rol es Líder de ministerio.",
+        )
+    }
+}
+
+/** Cambia los responsables de una actividad existente. */
+@Composable
+fun AssigneesForm(
+    activity: ChurchActivity,
+    eligible: List<Member>,
+    submitting: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (Set<String>) -> Unit,
+) {
+    var selected by remember { mutableStateOf(activity.assigneeIds.toSet()) }
+    val options = eligible
+    FullScreenForm(
+        title = "Responsables",
+        confirmLabel = "Guardar responsables",
+        canConfirm = selected.isNotEmpty() && selected != activity.assigneeIds.toSet(),
+        submitting = submitting,
+        error = error,
+        onDismiss = onDismiss,
+        onConfirm = { onSubmit(selected) },
+    ) {
+        Text("${activity.title} · ${activity.date.shortLabel()}", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Las personas agregadas recibirán un aviso de asignación.",
+            style = MaterialTheme.typography.bodySmall,
+            color = TextMuted,
+        )
+        FieldLabel("Responsables", required = true)
+        MemberPicker(options, selected, multiSelect = true, onChange = { selected = it }, emptyMessage = "No hay personas elegibles para esta actividad.")
+    }
+}
+
+/** Reasigna una tarea a otra persona responsable. */
+@Composable
+fun ReassignTaskForm(
+    task: ChurchActivity,
+    eligible: List<Member>,
+    submitting: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit,
+) {
+    val currentId = task.assigneeIds.firstOrNull()
+    var selected by remember { mutableStateOf(currentId) }
+    FullScreenForm(
+        title = "Reasignar tarea",
+        confirmLabel = "Reasignar",
+        canConfirm = selected != null && selected != currentId,
+        submitting = submitting,
+        error = error,
+        onDismiss = onDismiss,
+        onConfirm = { selected?.let(onSubmit) },
+    ) {
+        Text(task.title, style = MaterialTheme.typography.titleSmall)
+        task.parentActivityTitle?.let { Text("Actividad: $it", style = MaterialTheme.typography.bodySmall, color = TextSecondary) }
+        Text("La nueva persona responsable recibirá un aviso.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+        FieldLabel("Responsable", required = true)
+        MemberPicker(eligible, setOfNotNull(selected), multiSelect = false, onChange = { selected = it.firstOrNull() }, emptyMessage = "No hay personas elegibles.")
     }
 }
 

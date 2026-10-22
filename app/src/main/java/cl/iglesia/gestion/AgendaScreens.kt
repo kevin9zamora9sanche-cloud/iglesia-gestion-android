@@ -483,6 +483,7 @@ fun ActivityDetailSheet(
     onOpenItem: (ChurchActivity) -> Unit,
     onAddTask: () -> Unit,
     onEditRepertoire: () -> Unit,
+    onEditAssignees: () -> Unit,
     onChangeStatus: (String) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -549,17 +550,29 @@ fun ActivityDetailSheet(
                 LabeledValue("Director de alabanza", nameOf(item.worshipLeaderId) ?: "Sin asignar")
             }
             val people = item.assigneeIds.mapNotNull { id -> members.find { it.id == id } }
-            if (item.assigneeIds.isNotEmpty()) {
+            val canEditAssignees = canManage && !item.isMeeting && !item.isLegacyTask
+            if (item.assigneeIds.isNotEmpty() || canEditAssignees) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        when {
-                            item.isMeeting -> "Invitados"
-                            item.isTask -> "Responsable"
-                            else -> "Responsables"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = TextMuted,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            when {
+                                item.isMeeting -> "Invitados"
+                                item.isTask -> "Responsable"
+                                else -> "Responsables"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextMuted,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (canEditAssignees) {
+                            TextButton(onClick = onEditAssignees, enabled = !submitting) {
+                                Text(if (item.isTask) "Reasignar" else "Cambiar")
+                            }
+                        }
+                    }
+                    if (item.assigneeIds.isEmpty()) {
+                        Text("Sin responsable asignado.", style = MaterialTheme.typography.bodySmall, color = Warning)
+                    }
                     people.forEach { person ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Avatar(person.initials, size = 28.dp)

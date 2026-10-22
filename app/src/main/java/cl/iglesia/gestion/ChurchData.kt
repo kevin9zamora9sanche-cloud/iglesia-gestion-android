@@ -41,6 +41,8 @@ data class Member(
     val phone: String = "",
     val ministryIds: List<String> = emptyList(),
     val ledMinistryIds: List<String> = emptyList(),
+    /** Solo visible para el Pastor (función admin_list_users). */
+    val lastSignIn: OffsetDateTime? = null,
 ) {
     val isPastor: Boolean get() = role == Roles.PASTOR
     val isMinistryLeader: Boolean get() = role == Roles.MINISTRY_LEADER
@@ -282,6 +284,32 @@ data class WorshipSongDraft(
     val artist: String,
     val defaultKey: String,
     val referenceUrl: String,
+)
+
+/** Política propuesta: mínimo 8 caracteres con al menos una letra y un número. */
+fun passwordProblem(password: String): String? = when {
+    password.length < 8 -> "Debe tener al menos 8 caracteres."
+    password.none(Char::isLetter) || password.none(Char::isDigit) -> "Debe incluir al menos una letra y un número."
+    else -> null
+}
+
+data class NewUserDraft(
+    val email: String,
+    val fullName: String,
+    val phone: String,
+    val role: String,
+    val password: String,
+    /** ministryId -> es líder */
+    val memberships: Map<String, Boolean>,
+)
+
+data class ProfileDraft(
+    val fullName: String,
+    val phone: String,
+    val role: String,
+    val active: Boolean,
+    /** ministryId -> es líder */
+    val memberships: Map<String, Boolean>,
 )
 
 data class MinistryDraft(

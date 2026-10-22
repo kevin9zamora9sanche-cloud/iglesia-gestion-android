@@ -55,6 +55,21 @@ Las migraciones se aplican por timestamp y en este orden:
 9. `migrations/20261014130000_backfill_unambiguous_legacy_tasks.sql`
 10. `migrations/20261022100000_align_status_progress_worship_and_notifications.sql`
 11. `migrations/20261022110000_meeting_records_and_files.sql`
+12. `migrations/20261023100000_admin_user_directory.sql`
+
+La migración 12 agrega `admin_list_users()`, que muestra al Pastor el correo y
+el último acceso de cada cuenta.
+
+### Función `admin-users` (administración de cuentas)
+
+Crear cuentas y asignar contraseñas temporales requiere la clave
+`service_role`, que nunca va en la app. La Edge Function
+`functions/admin-users` verifica que quien llama sea un Pastor activo y solo
+entonces usa esa clave en el servidor. Despliégala con:
+
+```powershell
+npx.cmd --yes supabase functions deploy admin-users --project-ref sbvgcnahuunjnczecmpt --use-api
+```
 
 La migración 11 crea los registros posteriores a reuniones (`meeting_records`),
 separados de las convocatorias, con visibilidad para toda la iglesia, un

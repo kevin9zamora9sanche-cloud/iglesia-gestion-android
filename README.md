@@ -20,7 +20,11 @@ backend compartido se mantienen en el
 - Repertorios de cultos y catálogo de canciones del ministerio de Alabanza.
 - Registros posteriores a reuniones con resumen, visibilidad (toda la iglesia,
   un ministerio o personas seleccionadas) y archivos PDF/JPG/PNG de hasta 5 MB.
-- Gestión de ministerios, membresías y perfiles para el rol Pastor.
+- Gestión de ministerios y membresías para el rol Pastor.
+- Administración de usuarios por el Pastor: crear cuentas con contraseña
+  temporal, rol, estado, ministerios, restablecer o asignar contraseña (Edge
+  Function `admin-users`); cada usuario puede cambiar su propia contraseña.
+- Responsables asignables al crear y editables después (actividades y tareas).
 - Interfaz móvil implementada con Jetpack Compose.
 
 Las operaciones y los permisos dependen de las políticas RLS configuradas en el

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.LibraryMusic
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.People
@@ -62,6 +63,7 @@ fun MoreScreen(
     onRecords: () -> Unit,
     onPersonnel: () -> Unit,
     onNotifications: () -> Unit,
+    onChangePassword: () -> Unit,
     onLogout: () -> Unit,
 ) {
     LazyColumn(
@@ -94,7 +96,15 @@ fun MoreScreen(
         }
         item { MoreOption(Icons.Outlined.MusicNote, "Alabanza", "Repertorios de cultos y catálogo de canciones", onClick = onWorship) }
         item { MoreOption(Icons.Outlined.Description, "Registros de reuniones", "Resúmenes, archivos y presentaciones", onClick = onRecords) }
-        item { MoreOption(Icons.Outlined.People, "Personal", "Directorio de líderes y colaboradores", onClick = onPersonnel) }
+        item {
+            MoreOption(
+                Icons.Outlined.People,
+                if (member.isPastor) "Usuarios" else "Personal",
+                if (member.isPastor) "Crear cuentas, roles, ministerios y acceso" else "Directorio de líderes y colaboradores",
+                onClick = onPersonnel,
+            )
+        }
+        item { MoreOption(Icons.Outlined.Lock, "Cambiar mi contraseña", "Actualiza la contraseña de tu cuenta", onClick = onChangePassword) }
         item {
             MoreOption(
                 Icons.Outlined.NotificationsNone,
@@ -287,26 +297,50 @@ fun PersonnelScreen(
     ministries: List<Ministry>,
     onBack: () -> Unit,
     onEdit: (Member) -> Unit,
+    onCreate: () -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var roleFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var showInactive by rememberSaveable { mutableStateOf(true) }
     val filtered = members.filter {
-        it.name.contains(query.trim(), ignoreCase = true) && (roleFilter == null || it.role == roleFilter)
+        (it.name.contains(query.trim(), ignoreCase = true) || it.email.contains(query.trim(), ignoreCase = true)) &&
+            (roleFilter == null || it.role == roleFilter) &&
+            (showInactive || it.active)
     }
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = ListPadding,
+        contentPadding = ScreenPadding,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item { BackLink(onBack) }
         item {
             ScreenHeader(
-                "Directorio",
-                "Personal",
-                if (currentMember.isPastor) "Toca a una persona para editar su perfil y rol." else "Personas visibles según tus permisos.",
+                if (currentMember.isPastor) "Administración" else "Directorio",
+                if (currentMember.isPastor) "Usuarios" else "Personal",
+                if (currentMember.isPastor) "Crea cuentas y toca a una persona para gestionar su rol, ministerios y acceso." else "Personas visibles según tus permisos.",
             )
         }
-        item { TextInput(value = query, onValueChange = { query = it }, label = "Buscar persona") }
+        if (currentMember.isPastor) {
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf(
+                        "Activas" to members.count { it.active },
+                        "Inactivas" to members.count { !it.active },
+                        "Pastores" to members.count { it.isPastor && it.active },
+                    ).forEach { (label, value) ->
+                        AppCard(Modifier.weight(1f), contentPadding = 12.dp) {
+                            Text(value.toString(), style = MaterialTheme.typography.titleLarge, color = Brand)
+                            Text(label, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+        item { TextInput(value = query, onValueChange = { query = it }, label = if (currentMember.isPastor) "Buscar por nombre o correo" else "Buscar persona") }
+        if (currentMember.isPastor) {
+            item { SwitchRow("Mostrar cuentas inactivas", showInactive, { showInactive = it }) }
+        }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(listOf<String?>(null) + Roles.all) { role ->
@@ -339,12 +373,32 @@ fun PersonnelScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        if (currentMember.isPastor && person.email.isNotBlank()) {
+                            Text(
+                                person.email + (person.lastSignIn?.let { " · ${it.relativeLabel()}" } ?: " · sin accesos"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                     if (!person.active) Pill("Inactiva", Danger, DangerSurface)
                     if (currentMember.isPastor) Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = TextMuted)
                 }
             }
         }
+    }
+    if (currentMember.isPastor) {
+        ExtendedFloatingActionButton(
+            onClick = onCreate,
+            icon = { Icon(Icons.Outlined.PersonAddAlt, contentDescription = null) },
+            text = { Text("Nueva cuenta") },
+            containerColor = Brand,
+            contentColor = Color.White,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+        )
+    }
     }
 }
 
