@@ -1,20 +1,71 @@
 package cl.iglesia.gestion
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
+// Paleta institucional. Todos los colores de texto cumplen WCAG AA (4.5:1) sobre blanco.
 val Brand = Color(0xFF1E3A8A)
 val BrandLight = Color(0xFF2563EB)
 val BrandSurface = Color(0xFFEFF6FF)
+val BrandContainer = Color(0xFFDBEAFE)
 val Gold = Color(0xFFC9A84C)
-val SurfaceWarm = Color(0xFFFAF8F5)
-val BorderWarm = Color(0xFFE8E2DA)
-val MutedWarm = Color(0xFFF2EDE6)
-val TextMuted = Color(0xFF78716C)
-val Navy = Color(0xFF1E3A5F)
-val Green = Color(0xFF5A7A2B)
+val GoldText = Color(0xFF8A6A12)
+val GoldSurface = Color(0xFFFBF5E3)
+val AppBackground = Color(0xFFF5F7FB)
+val CardBorder = Color(0xFFE2E8F0)
+val MutedSurface = Color(0xFFF1F5F9)
+val TextPrimary = Color(0xFF0F172A)
+val TextSecondary = Color(0xFF475569)
+val TextMuted = Color(0xFF64748B)
+val Success = Color(0xFF15803D)
+val SuccessSurface = Color(0xFFDCFCE7)
+val Warning = Color(0xFFB45309)
+val WarningSurface = Color(0xFFFEF3C7)
+val Danger = Color(0xFFB42318)
+val DangerSurface = Color(0xFFFEE4E2)
+
+/** Colores semánticos por estado: Por hacer, En curso, En pausa, Completada, Cancelada. */
+data class StatusStyle(val label: String, val content: Color, val container: Color)
+
+fun statusStyle(status: String, feminine: Boolean = true): StatusStyle = when (status) {
+    "pending" -> StatusStyle("Por hacer", TextSecondary, MutedSurface)
+    "in_progress" -> StatusStyle("En curso", BrandLight, BrandSurface)
+    "paused" -> StatusStyle("En pausa", Warning, WarningSurface)
+    "completed" -> StatusStyle(if (feminine) "Completada" else "Completado", Success, SuccessSurface)
+    "cancelled" -> StatusStyle(if (feminine) "Cancelada" else "Cancelado", Danger, DangerSurface)
+    else -> StatusStyle("Sin estado", TextSecondary, MutedSurface)
+}
+
+private val ChurchTypography = Typography(
+    headlineMedium = TextStyle(fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold, color = TextPrimary),
+    headlineSmall = TextStyle(fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold),
+    titleLarge = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
+    titleMedium = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
+    titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold),
+    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
+    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
+    bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
+    labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold),
+    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium),
+    labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
+)
+
+private val ChurchShapes = Shapes(
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(14.dp),
+    large = RoundedCornerShape(18.dp),
+    extraLarge = RoundedCornerShape(28.dp),
+)
 
 @Composable
 fun ChurchTheme(content: @Composable () -> Unit) {
@@ -22,12 +73,31 @@ fun ChurchTheme(content: @Composable () -> Unit) {
         colorScheme = lightColorScheme(
             primary = Brand,
             onPrimary = Color.White,
-            secondary = Gold,
-            background = SurfaceWarm,
+            primaryContainer = BrandContainer,
+            onPrimaryContainer = Brand,
+            secondary = GoldText,
+            onSecondary = Color.White,
+            secondaryContainer = GoldSurface,
+            onSecondaryContainer = GoldText,
+            tertiary = BrandLight,
+            background = AppBackground,
+            onBackground = TextPrimary,
             surface = Color.White,
-            onSurface = Color(0xFF1C1917),
-            outline = BorderWarm,
+            onSurface = TextPrimary,
+            surfaceVariant = MutedSurface,
+            onSurfaceVariant = TextSecondary,
+            surfaceContainerLowest = Color.White,
+            surfaceContainerLow = Color.White,
+            surfaceContainer = Color.White,
+            surfaceContainerHigh = Color.White,
+            surfaceContainerHighest = MutedSurface,
+            outline = Color(0xFFCBD5E1),
+            outlineVariant = CardBorder,
+            error = Danger,
+            errorContainer = DangerSurface,
         ),
+        typography = ChurchTypography,
+        shapes = ChurchShapes,
         content = content,
     )
 }

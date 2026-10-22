@@ -10,11 +10,17 @@ backend compartido se mantienen en el
 
 - Inicio de sesión, cierre y restauración de sesión con Supabase Auth.
 - Consulta del perfil, rol y estado de cuenta del usuario.
-- Panel de inicio y agenda móvil con selección de fechas en una franja de 14 días.
-- Consulta de ministerios, proyectos, actividades, reuniones y notificaciones.
-- Alta de proyectos, actividades y reuniones, y actualización de tareas asignadas.
-- Catálogo de canciones y repertorios del ministerio de Alabanza.
-- Administración de perfiles para el rol Pastor.
+- Inicio "Mis pendientes" con trabajo propio con fecha y avisos sin leer.
+- Agenda general y personal con semana navegable, filtros por tipo y detalle
+  (responsables, invitados, predicador, director, tareas y repertorio).
+- Actividades con tipo y clasificación (ministerio, proyecto, general o
+  individual), tareas hijas con prioridad, fecha límite y comentarios, y
+  cambio de estado (Por hacer, En curso, En pausa, Completada).
+- Proyectos institucionales con edición completa y avance automático.
+- Repertorios de cultos y catálogo de canciones del ministerio de Alabanza.
+- Registros posteriores a reuniones con resumen, visibilidad (toda la iglesia,
+  un ministerio o personas seleccionadas) y archivos PDF/JPG/PNG de hasta 5 MB.
+- Gestión de ministerios, membresías y perfiles para el rol Pastor.
 - Interfaz móvil implementada con Jetpack Compose.
 
 Las operaciones y los permisos dependen de las políticas RLS configuradas en el
@@ -26,7 +32,7 @@ de datos de demostración.
 - Kotlin 2.0.21 y Android Gradle Plugin 8.7.3.
 - Gradle Wrapper 8.9.
 - Jetpack Compose y Material 3.
-- Supabase Kotlin SDK 2.6.1 y Ktor Android 2.3.12.
+- Supabase Kotlin SDK 2.6.1 (Auth, PostgREST y Storage) y Ktor Android 2.3.12.
 - Android SDK: compile/target 35; mínimo Android 8.0 (API 26).
 
 ## Requisitos de desarrollo
@@ -89,10 +95,17 @@ no se confirman en Git.
 ```
 
 El código de la aplicación está en
-`app/src/main/java/cl/iglesia/gestion/`: `MainActivity.kt` contiene la interfaz y
-el flujo de navegación, `ChurchData.kt` define los datos usados por la app,
-`SupabaseBackend.kt` encapsula el acceso a Supabase y `Theme.kt` configura el
-tema de Compose.
+`app/src/main/java/cl/iglesia/gestion/`:
+
+- `MainActivity.kt`: sesión, navegación, permisos y orquestación de escrituras.
+- `AgendaScreens.kt`: Inicio ("Mis pendientes"), Agenda general/personal y detalle.
+- `ManagementScreens.kt`: Ministerios (membresías) y Proyectos.
+- `MoreScreens.kt`: Alabanza (repertorio y catálogo), Personal y Avisos.
+- `RecordsScreens.kt`: registros de reuniones y selección/validación de archivos.
+- `Forms.kt`: formularios a pantalla completa con selectores de fecha y hora.
+- `Components.kt`: componentes y formateadores compartidos.
+- `ChurchData.kt`: modelos; `SupabaseBackend.kt`: acceso a Supabase;
+  `Theme.kt`: paleta (contraste AA), tipografía y formas.
 
 ## Colaboración
 

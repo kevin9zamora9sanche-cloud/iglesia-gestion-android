@@ -1,25 +1,31 @@
 package cl.iglesia.gestion
 
-import cl.iglesia.gestion.BuildConfig
 import android.util.Base64
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.gotrue.Auth
 import io.github.jan.supabase.gotrue.auth
-import io.github.jan.supabase.gotrue.providers.builtin.Email
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.rpc
+import io.github.jan.supabase.storage.Storage
+import io.github.jan.supabase.storage.storage
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.time.LocalDate
 import java.time.OffsetDateTime
-import java.time.temporal.ChronoUnit
+import java.time.ZoneId
 import java.util.UUID
+import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.minutes
 
 object SupabaseBackend {
     val isConfigured: Boolean
@@ -28,15 +34,18 @@ object SupabaseBackend {
             BuildConfig.SUPABASE_ANON_KEY.isPublicClientKey()
 
     val client by lazy {
-        check(isConfigured) { "Configura Supabase en android/supabase.properties." }
+        check(isConfigured) { "Configura Supabase en supabase.properties." }
         createSupabaseClient(
             supabaseUrl = BuildConfig.SUPABASE_URL,
             supabaseKey = BuildConfig.SUPABASE_ANON_KEY,
         ) {
             install(Auth)
             install(Postgrest)
+            install(Storage)
         }
     }
+
+    private const val RECORDS_BUCKET = "meeting-records"
 
     suspend fun loadCurrentMember(): Member {
         val user = client.auth.retrieveUserForCurrentSession()
@@ -47,186 +56,242 @@ object SupabaseBackend {
                 }
             }
             .decodeSingle<SupabaseProfile>()
-        val ministryIds = client.from("ministry_memberships")
+
+        check(profile.isActive) {
+            "Esta cuenta está inactiva. Contacta al Pastor/Administrador."
+        }
+
+        val memberships = client.from("ministry_memberships")
             .select {
                 filter {
                     eq("user_id", user.id)
                 }
             }
             .decodeList<SupabaseMembership>()
-            .map(SupabaseMembership::ministryId)
-
-        check(profile.isActive) {
-            "Esta cuenta está inactiva. Contacta al Pastor/Administrador."
-        }
-
+        val role = profile.role.toRoleLabel()
         val displayName = profile.fullName.ifBlank {
             user.email?.substringBefore("@")?.takeIf(String::isNotBlank) ?: "Usuario"
         }
         return Member(
             id = profile.id,
             name = displayName,
-            role = profile.role.toRoleLabel(),
-            ministryId = ministryIds.firstOrNull(),
-            initials = displayName.split(Regex("\\s+"))
-                .take(2)
-                .mapNotNull(String::firstOrNull)
-                .joinToString("")
-                .uppercase(),
+            role = role,
+            initials = displayName.initials(),
             email = user.email.orEmpty(),
             active = profile.isActive,
             phone = profile.phone.orEmpty(),
-            ministryIds = ministryIds,
+            ministryIds = memberships.map(SupabaseMembership::ministryId),
+            ledMinistryIds = memberships
+                .filter { it.isLeader && role == Roles.MINISTRY_LEADER }
+                .map(SupabaseMembership::ministryId),
         )
     }
 
     suspend fun loadChurchSnapshot(currentMember: Member): ChurchSnapshot {
         val ministryRows = client.from("ministries")
-            .select()
+            .select { order("name", Order.ASCENDING) }
             .decodeList<SupabaseMinistry>()
             .filter(SupabaseMinistry::isActive)
         val membershipRows = client.from("ministry_memberships")
             .select()
             .decodeList<SupabaseMembership>()
         val memberRows = client.from("profiles")
-            .select()
+            .select { order("full_name", Order.ASCENDING) }
             .decodeList<SupabaseProfile>()
+        val membershipsByUser = membershipRows.groupBy(SupabaseMembership::userId)
         val members = memberRows.map { profile ->
             val name = profile.fullName.ifBlank {
                 if (profile.id == currentMember.id) currentMember.name else "Usuario"
             }
+            val role = profile.role.toRoleLabel()
+            val memberships = membershipsByUser[profile.id].orEmpty()
             Member(
                 id = profile.id,
                 name = name,
-                role = profile.role.toRoleLabel(),
-                ministryId = membershipRows.firstOrNull { it.userId == profile.id }?.ministryId,
+                role = role,
                 initials = name.initials(),
                 email = if (profile.id == currentMember.id) currentMember.email else "",
                 active = profile.isActive,
                 phone = profile.phone.orEmpty(),
-                ministryIds = membershipRows
-                    .filter { it.userId == profile.id }
+                ministryIds = memberships.map(SupabaseMembership::ministryId),
+                ledMinistryIds = memberships
+                    .filter { it.isLeader && role == Roles.MINISTRY_LEADER }
                     .map(SupabaseMembership::ministryId),
             )
         }
-        val leaderByMinistry = membershipRows
-            .filter(SupabaseMembership::isLeader)
-            .associate { it.ministryId to it.userId }
         val ministries = ministryRows.mapIndexed { index, ministry ->
             Ministry(
                 id = ministry.id,
                 name = ministry.name,
                 icon = ministry.name.ministryIcon(),
                 color = MINISTRY_COLORS[index % MINISTRY_COLORS.size],
-                leaderId = leaderByMinistry[ministry.id].orEmpty(),
+                leaderIds = membershipRows
+                    .filter { it.ministryId == ministry.id && it.isLeader }
+                    .map(SupabaseMembership::userId),
                 description = ministry.description,
             )
         }
+
         val activities = client.from("activities")
             .select()
             .decodeList<SupabaseActivity>()
         val tasks = client.from("tasks")
             .select()
             .decodeList<SupabaseTask>()
-        val activitiesByProject = activities.filter { it.projectId != null }.groupBy { it.projectId }
-        val tasksByActivity = tasks.groupBy { it.activityId }
-        val projects = client.from("projects")
+        // RLS devuelve las asignaciones propias y las de actividades que el usuario administra.
+        val assignmentsByActivity = client.from("activity_assignments")
             .select()
+            .decodeList<SupabaseActivityAssignment>()
+            .groupBy(SupabaseActivityAssignment::activityId)
+            .mapValues { (_, rows) -> rows.map(SupabaseActivityAssignment::userId) }
+
+        val tasksByActivity = tasks.groupBy(SupabaseTask::activityId)
+        val activitiesByProject = activities
+            .filter { it.projectId != null && it.kind == "activity" }
+            .groupBy { it.projectId }
+        val projects = client.from("projects")
+            .select { order("due_date", Order.ASCENDING) }
             .decodeList<SupabaseProject>()
             .map { project ->
-                val projectActivities = activitiesByProject[project.id].orEmpty()
-                val calculatedProgress = if (projectActivities.isNotEmpty()) {
-                    val sumProgress = projectActivities.sumOf { act ->
-                        val actTasks = tasksByActivity[act.id].orEmpty()
-                        if (actTasks.isNotEmpty()) {
-                            (actTasks.count { it.status == "completed" }.toDouble() / actTasks.size * 100).toInt()
-                        } else {
-                            if (act.status == "completed") 100 else 0
-                        }
-                    }
-                    sumProgress / projectActivities.size
-                } else {
-                    project.progress
-                }
                 ChurchProject(
+                    id = project.id,
                     name = project.name,
                     objective = project.objective,
                     description = project.description,
                     leaderId = project.leaderId,
-                    dueInDays = ChronoUnit.DAYS.between(
-                        LocalDate.now(),
-                        LocalDate.parse(project.dueDate),
-                    ).coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt(),
-                    progress = calculatedProgress,
-                    status = project.status.toProjectStatusLabel(),
+                    startDate = LocalDate.parse(project.startDate),
+                    dueDate = LocalDate.parse(project.dueDate),
+                    progress = calculateProjectProgress(
+                        activitiesByProject[project.id].orEmpty(),
+                        tasksByActivity,
+                    ),
+                    status = project.status,
                     budgetEstimated = project.budget?.toLong(),
                     budgetExecuted = project.budgetExecuted?.toLong(),
-                    id = project.id,
                 )
             }
-        val assignedActivityIds = client.from("activity_assignments")
-            .select {
-                filter {
-                    eq("user_id", currentMember.id)
-                }
-            }
-            .decodeList<SupabaseActivityAssignment>()
-            .mapTo(mutableSetOf(), SupabaseActivityAssignment::activityId)
-        val churchActivities = activities.map {
-            it.toChurchActivity(it.id in assignedActivityIds)
+
+        val churchActivities = activities.map { activity ->
+            val assigneeIds = assignmentsByActivity[activity.id].orEmpty()
+            activity.toChurchActivity(
+                assigneeIds = assigneeIds,
+                isAssignedToCurrentUser = currentMember.id in assigneeIds,
+            )
         }
         val activityById = activities.associateBy(SupabaseActivity::id)
-        val churchTasks = tasks.map { task ->
-            val parentActivity = checkNotNull(activityById[task.activityId]) {
-                "No se encontró la actividad asociada a la tarea ${task.id}."
-            }
-            val dueAt = task.dueAt?.let(OffsetDateTime::parse)
+        // Una tarea cuyo padre no es visible por RLS se omite en vez de invalidar toda la carga.
+        val churchTasks = tasks.mapNotNull { task ->
+            val parentActivity = activityById[task.activityId] ?: return@mapNotNull null
+            val dueAt = task.dueAt?.let(::parseTimestamp)
+            val localDue = dueAt?.atZoneSameInstant(ZoneId.systemDefault())
             ChurchActivity(
                 id = task.id,
                 title = task.title,
                 description = task.instructions,
-                date = dueAt?.toLocalDate() ?: LocalDate.parse(parentActivity.activityDate),
-                time = dueAt?.toLocalTime()?.toString()?.take(5) ?: parentActivity.startTime.take(5),
-                endTime = dueAt?.toLocalTime()?.toString()?.take(5) ?: parentActivity.endTime.take(5),
+                date = localDue?.toLocalDate() ?: LocalDate.parse(parentActivity.activityDate),
+                time = localDue?.toLocalTime()?.toString()?.take(5) ?: parentActivity.startTime.take(5),
+                endTime = localDue?.toLocalTime()?.toString()?.take(5) ?: parentActivity.endTime.take(5),
                 ministryId = parentActivity.ministryId,
                 location = parentActivity.location,
-                status = task.status.toTaskStateLabel(),
-                kind = "Tarea",
-                taskStatus = task.status,
+                status = task.status,
+                kind = ItemKind.Task,
+                classification = parentActivity.classification(),
+                projectId = parentActivity.projectId,
+                assigneeIds = listOf(task.assigneeId),
                 isAssignedToCurrentUser = task.assigneeId == currentMember.id,
+                parentActivityId = parentActivity.id,
                 parentActivityTitle = parentActivity.title,
                 priority = task.priority,
+                comments = task.comments,
+                dueAt = dueAt,
             )
         }
+
+        val participantsByMeeting = client.from("meeting_participants")
+            .select()
+            .decodeList<SupabaseMeetingParticipant>()
+            .groupBy(SupabaseMeetingParticipant::meetingId)
+            .mapValues { (_, rows) -> rows.map(SupabaseMeetingParticipant::userId) }
         val meetings = client.from("meetings")
             .select()
             .decodeList<SupabaseMeeting>()
-            .map(SupabaseMeeting::toChurchActivity)
-        val worshipMinistryId = ministries.firstOrNull {
-            it.name.contains("alabanza", ignoreCase = true)
-        }?.id
+            .map { meeting ->
+                val participants = participantsByMeeting[meeting.id].orEmpty()
+                meeting.toChurchActivity(
+                    participantIds = participants,
+                    isAssignedToCurrentUser = currentMember.id in participants,
+                )
+            }
+
+        val worshipMinistryId = ministries.firstOrNull(Ministry::isWorship)?.id
         val songs = worshipMinistryId?.let { ministryId ->
             client.from("worship_songs")
                 .select {
                     filter {
                         eq("ministry_id", ministryId)
                     }
+                    order("title", Order.ASCENDING)
                 }
                 .decodeList<SupabaseSong>()
-                .map { Triple(it.title, it.artist, it.defaultKey) }
+                .map {
+                    WorshipSong(
+                        id = it.id,
+                        title = it.title,
+                        artist = it.artist,
+                        defaultKey = it.defaultKey,
+                        referenceUrl = it.referenceUrl,
+                    )
+                }
         }.orEmpty()
-        val notifications = client.from("notifications")
+        val setSongsBySet = client.from("worship_set_songs")
             .select()
+            .decodeList<SupabaseWorshipSetSong>()
+            .groupBy(SupabaseWorshipSetSong::setId)
+        val worshipSets = client.from("worship_sets")
+            .select()
+            .decodeList<SupabaseWorshipSet>()
+            .map { set ->
+                WorshipSet(
+                    id = set.id,
+                    activityId = set.activityId,
+                    directorId = set.directorId,
+                    updatedAt = set.updatedAt?.let(::parseTimestamp),
+                    songs = setSongsBySet[set.id].orEmpty()
+                        .sortedBy(SupabaseWorshipSetSong::position)
+                        .map {
+                            WorshipSetSong(
+                                songId = it.songId,
+                                position = it.position,
+                                key = it.songKey,
+                                leadId = it.leadId,
+                            )
+                        },
+                )
+            }
+
+        val notifications = client.from("notifications")
+            .select { order("created_at", Order.DESCENDING) }
             .decodeList<SupabaseNotification>()
             .map {
                 ChurchNotification(
                     id = it.id,
                     message = it.message,
                     type = it.type,
-                    createdAt = it.createdAt,
+                    createdAt = parseTimestamp(it.createdAt),
                     read = it.read,
                 )
             }
+
+        // Los registros dependen de la migración 20261022110000; si aún no está
+        // aplicada, el resto de módulos sigue funcionando y la pantalla lo indica.
+        val meetingRecords = try {
+            loadMeetingRecords()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "Registros de reuniones no disponibles", error)
+            null
+        }
 
         return ChurchSnapshot(
             members = members,
@@ -236,12 +301,139 @@ object SupabaseBackend {
             ),
             projects = projects,
             songs = songs,
+            worshipSets = worshipSets,
             notifications = notifications,
+            meetingRecords = meetingRecords.orEmpty(),
+            recordsAvailable = meetingRecords != null,
         )
     }
 
+    private suspend fun loadMeetingRecords(): List<MeetingRecord> {
+        val viewersByRecord = client.from("meeting_record_viewers")
+            .select()
+            .decodeList<SupabaseRecordViewer>()
+            .groupBy(SupabaseRecordViewer::recordId)
+        val filesByRecord = client.from("meeting_record_files")
+            .select { order("created_at", Order.ASCENDING) }
+            .decodeList<SupabaseRecordFile>()
+            .groupBy(SupabaseRecordFile::recordId)
+        return client.from("meeting_records")
+            .select { order("record_date", Order.DESCENDING) }
+            .decodeList<SupabaseMeetingRecord>()
+            .map { record ->
+                MeetingRecord(
+                    id = record.id,
+                    meetingId = record.meetingId,
+                    title = record.title,
+                    date = LocalDate.parse(record.recordDate),
+                    summary = record.summary,
+                    visibility = RecordVisibility.entries.firstOrNull { it.databaseValue == record.visibility }
+                        ?: RecordVisibility.Selected,
+                    ministryId = record.ministryId,
+                    viewerIds = viewersByRecord[record.id].orEmpty().map(SupabaseRecordViewer::userId),
+                    files = filesByRecord[record.id].orEmpty().map {
+                        RecordFile(it.id, it.fileName, it.contentType, it.sizeBytes, it.objectPath)
+                    },
+                )
+            }
+    }
+
+    /**
+     * Crea el registro y sube sus archivos. Si un archivo falla, el registro queda
+     * guardado y se informa exactamente qué archivos no se adjuntaron.
+     */
+    suspend fun createMeetingRecord(currentMember: Member, draft: MeetingRecordDraft, files: List<PickedFile>) {
+        require(currentMember.isPastor) { "Solo el Pastor/Administrador registra reuniones." }
+        val recordId = UUID.randomUUID().toString()
+        client.from("meeting_records").insert(
+            MeetingRecordInsert(
+                id = recordId,
+                meetingId = draft.meetingId,
+                title = draft.title.trim(),
+                recordDate = draft.date.toString(),
+                summary = draft.summary.trim(),
+                visibility = draft.visibility.databaseValue,
+                ministryId = draft.ministryId.takeIf { draft.visibility == RecordVisibility.Ministry },
+                createdBy = currentMember.id,
+            ),
+        )
+        if (draft.visibility == RecordVisibility.Selected && draft.viewerIds.isNotEmpty()) {
+            client.from("meeting_record_viewers").insert(
+                draft.viewerIds.distinct().map { SupabaseRecordViewer(recordId, it) },
+            )
+        }
+        val failed = files.filter { file ->
+            try {
+                uploadRecordFile(currentMember, recordId, file)
+                false
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                android.util.Log.w("SupabaseBackend", "No se pudo adjuntar ${file.name}", error)
+                true
+            }
+        }
+        if (failed.isNotEmpty()) {
+            throw UserFacingException(
+                "El registro se guardó, pero no se pudieron adjuntar: ${failed.joinToString { it.name }}. " +
+                    "Puedes volver a adjuntarlos desde el registro.",
+            )
+        }
+    }
+
+    suspend fun uploadRecordFile(currentMember: Member, recordId: String, file: PickedFile) {
+        val extension = ALLOWED_FILE_TYPES[file.contentType]
+            ?: throw UserFacingException("Solo se permiten archivos PDF, JPG o PNG.")
+        if (file.bytes.isEmpty() || file.bytes.size > MAX_FILE_BYTES) {
+            throw UserFacingException("Cada archivo debe pesar como máximo 5 MB.")
+        }
+        val fileId = UUID.randomUUID().toString()
+        val path = "$recordId/$fileId.$extension"
+        val bucket = client.storage.from(RECORDS_BUCKET)
+        bucket.upload(path, file.bytes, upsert = false)
+        try {
+            client.from("meeting_record_files").insert(
+                RecordFileInsert(
+                    id = fileId,
+                    recordId = recordId,
+                    fileName = file.name,
+                    contentType = file.contentType,
+                    sizeBytes = file.bytes.size.toLong(),
+                    objectPath = path,
+                    uploadedBy = currentMember.id,
+                ),
+            )
+        } catch (error: Exception) {
+            // Sin fila asociada el objeto quedaría huérfano: se elimina.
+            runCatching { bucket.delete(path) }
+            throw error
+        }
+    }
+
+    suspend fun deleteRecordFile(file: RecordFile) {
+        client.from("meeting_record_files").delete {
+            filter { eq("id", file.id) }
+        }
+        client.storage.from(RECORDS_BUCKET).delete(file.objectPath)
+    }
+
+    suspend fun deleteMeetingRecord(record: MeetingRecord) {
+        if (record.files.isNotEmpty()) {
+            client.storage.from(RECORDS_BUCKET).delete(record.files.map(RecordFile::objectPath))
+        }
+        client.from("meeting_records").delete {
+            filter { eq("id", record.id) }
+        }
+    }
+
+    /** Enlace temporal de descarga; Storage valida los permisos del registro. */
+    suspend fun signedFileUrl(file: RecordFile): String {
+        val url = client.storage.from(RECORDS_BUCKET).createSignedUrl(file.objectPath, 5.minutes)
+        return if (url.startsWith("http")) url else BuildConfig.SUPABASE_URL.trimEnd('/') + "/storage/v1/" + url.trimStart('/')
+    }
+
     suspend fun createProject(currentMember: Member, draft: ProjectDraft) {
-        require(currentMember.role == "Pastor/Administrador") {
+        require(currentMember.isPastor) {
             "Solo el Pastor/Administrador puede crear proyectos."
         }
         client.from("projects").insert(
@@ -251,101 +443,119 @@ object SupabaseBackend {
                 objective = draft.objective.trim(),
                 description = draft.description.trim(),
                 leaderId = draft.leaderId,
-                startDate = draft.startDate,
-                dueDate = draft.dueDate,
+                startDate = draft.startDate.toString(),
+                dueDate = draft.dueDate.toString(),
                 budget = draft.budgetEstimated,
                 budgetExecuted = draft.budgetExecuted,
+                status = draft.status,
                 createdBy = currentMember.id,
             ),
         )
     }
 
-    suspend fun updateProjectAsPastor(currentMember: Member, draft: ProjectUpdateDraft) {
-        require(currentMember.role == "Pastor/Administrador") {
-            "Solo el Pastor/Administrador puede actualizar proyectos."
+    suspend fun updateProject(currentMember: Member, draft: ProjectDraft) {
+        require(currentMember.isPastor) {
+            "Solo el Pastor/Administrador puede editar proyectos."
         }
-        val databaseStatus = when (draft.status) {
-            "Por hacer" -> "pending"
-            "En curso" -> "in_progress"
-            "En pausa" -> "paused"
-            "Completada" -> "completed"
-            "Cancelada" -> "cancelled"
-            else -> draft.status
-        }
+        val projectId = requireNotNull(draft.id) { "El proyecto a editar no es válido." }
+        require(draft.status in WORK_STATUSES) { "El estado seleccionado no es válido." }
         client.from("projects").update(
             ProjectUpdatePayload(
-                status = databaseStatus,
+                name = draft.name.trim(),
+                objective = draft.objective.trim(),
+                description = draft.description.trim(),
+                leaderId = draft.leaderId,
+                startDate = draft.startDate.toString(),
+                dueDate = draft.dueDate.toString(),
+                budget = draft.budgetEstimated,
                 budgetExecuted = draft.budgetExecuted,
+                status = draft.status,
             ),
         ) {
             filter {
-                eq("id", draft.id)
+                eq("id", projectId)
             }
         }
     }
 
     suspend fun createActivity(currentMember: Member, draft: ActivityDraft) {
-        val activityId = UUID.randomUUID().toString()
-        if (draft.kind == "meeting") {
-            client.from("meetings").insert(
-                MeetingInsert(
-                    id = activityId,
-                    title = draft.title.trim(),
-                    purpose = draft.description.trim(),
-                    meetingDate = draft.date,
-                    startTime = draft.startTime,
-                    endTime = draft.endTime,
-                    location = draft.location.trim(),
-                    ministryId = draft.ministryId,
-                    createdBy = currentMember.id,
-                ),
-            )
-            if (draft.assigneeIds.isNotEmpty()) {
-                client.from("meeting_participants").insert(
-                    draft.assigneeIds.distinct().map { userId ->
-                        MeetingParticipantInsert(activityId, userId)
-                    },
-                )
-            }
-            return
+        require(draft.assigneeIds.isNotEmpty()) { "Selecciona al menos un responsable." }
+        val ministryId = draft.ministryId.takeIf { draft.classification == Classification.Ministry }
+        val projectId = draft.projectId.takeIf { draft.classification == Classification.Project }
+        require(currentMember.isPastor || currentMember.canManageMinistry(ministryId)) {
+            "Solo puedes crear actividades dentro de los ministerios que lideras."
         }
-
+        val isCulto = draft.category == ActivityTypes.CULTO
+        val activityId = UUID.randomUUID().toString()
         client.from("activities").insert(
             ActivityInsert(
                 id = activityId,
                 title = draft.title.trim(),
                 description = draft.description.trim(),
-                activityDate = draft.date,
-                startTime = draft.startTime,
-                endTime = draft.endTime,
-                ministryId = draft.ministryId,
-                activityType = if (draft.ministryId == null) "general" else "ministry",
-                kind = draft.kind,
+                activityDate = draft.date.toString(),
+                startTime = draft.startTime.toString(),
+                endTime = draft.endTime.toString(),
+                ministryId = ministryId,
+                activityType = draft.classification.databaseValue,
+                kind = "activity",
                 location = draft.location.trim(),
                 category = draft.category,
-                projectId = draft.projectId,
-                worshipLeaderId = draft.worshipLeaderId,
-                preacherId = draft.preacherId,
-                priority = null,
-                taskStatus = null,
+                projectId = projectId,
+                worshipLeaderId = draft.worshipLeaderId.takeIf { isCulto },
+                preacherId = draft.preacherId.takeIf { isCulto },
                 createdBy = currentMember.id,
             ),
         )
-        if (draft.assigneeIds.isNotEmpty()) {
-            client.from("activity_assignments").insert(
-                draft.assigneeIds.distinct().map { userId ->
-                    ActivityAssignmentInsert(
-                        activityId = activityId,
-                        userId = userId,
-                        assignedBy = currentMember.id,
-                    )
+        client.from("activity_assignments").insert(
+            draft.assigneeIds.distinct().map { userId ->
+                ActivityAssignmentInsert(
+                    activityId = activityId,
+                    userId = userId,
+                    assignedBy = currentMember.id,
+                )
+            },
+        )
+    }
+
+    suspend fun createMeeting(currentMember: Member, draft: MeetingDraft) {
+        require(currentMember.isPastor || currentMember.canManageMinistry(draft.ministryId)) {
+            "Solo puedes convocar reuniones de los ministerios que lideras."
+        }
+        val meetingId = UUID.randomUUID().toString()
+        client.from("meetings").insert(
+            MeetingInsert(
+                id = meetingId,
+                title = draft.title.trim(),
+                purpose = draft.purpose.trim(),
+                meetingDate = draft.date.toString(),
+                startTime = draft.startTime.toString(),
+                endTime = draft.endTime.toString(),
+                location = draft.location.trim(),
+                ministryId = draft.ministryId,
+                createdBy = currentMember.id,
+            ),
+        )
+        if (draft.participantIds.isNotEmpty()) {
+            client.from("meeting_participants").insert(
+                draft.participantIds.distinct().map { userId ->
+                    MeetingParticipantInsert(meetingId, userId)
                 },
             )
         }
     }
 
+    suspend fun updateActivityStatus(activityId: String, status: String) {
+        require(status in WORK_STATUSES) { "El estado seleccionado no es válido." }
+        client.from("activities").update(ActivityStatusUpdate(status.toEventStatus())) {
+            filter {
+                eq("id", activityId)
+                eq("kind", "activity")
+            }
+        }
+    }
+
     suspend fun createTask(currentMember: Member, draft: TaskDraft) {
-        require(currentMember.role in setOf("Pastor/Administrador", "Líder de ministerio")) {
+        require(currentMember.isPastor || currentMember.isMinistryLeader) {
             "Solo el Pastor/Administrador o el Líder de ministerio puede asignar tareas."
         }
         client.from("tasks").insert(
@@ -355,16 +565,17 @@ object SupabaseBackend {
                 title = draft.title.trim(),
                 instructions = draft.instructions.trim(),
                 assigneeId = draft.assigneeId,
-                dueAt = draft.dueAt,
+                dueAt = draft.dueAt?.toString(),
                 priority = draft.priority,
                 status = "pending",
+                comments = draft.comments.trim(),
                 assignedBy = currentMember.id,
             ),
         )
     }
 
     suspend fun updateTaskStatus(taskId: String, status: String) {
-        require(status in setOf("pending", "in_progress", "paused", "completed"))
+        require(status in WORK_STATUSES) { "El estado seleccionado no es válido." }
         client.from("tasks").update(TaskStatusUpdate(status)) {
             filter {
                 eq("id", taskId)
@@ -373,7 +584,7 @@ object SupabaseBackend {
     }
 
     suspend fun updateLegacyTaskStatus(activityId: String, status: String) {
-        require(status in setOf("pending", "in_progress", "paused", "completed", "cancelled"))
+        require(status in WORK_STATUSES) { "El estado seleccionado no es válido." }
         client.from("activities").update(LegacyTaskStatusUpdate(status)) {
             filter {
                 eq("id", activityId)
@@ -390,6 +601,15 @@ object SupabaseBackend {
         }
     }
 
+    suspend fun markAllNotificationsRead(currentMember: Member) {
+        client.from("notifications").update(NotificationReadUpdate(read = true)) {
+            filter {
+                eq("user_id", currentMember.id)
+                eq("read", false)
+            }
+        }
+    }
+
     suspend fun createWorshipSong(currentMember: Member, ministryId: String, draft: WorshipSongDraft) {
         client.from("worship_songs").insert(
             WorshipSongInsert(
@@ -398,21 +618,79 @@ object SupabaseBackend {
                 title = draft.title.trim(),
                 artist = draft.artist.trim(),
                 defaultKey = draft.defaultKey.trim(),
+                referenceUrl = draft.referenceUrl.trim(),
                 createdBy = currentMember.id,
             ),
         )
     }
 
+    /** Reemplaza el repertorio completo de un Culto en una sola transacción. */
+    suspend fun saveWorshipSet(activityId: String, ministryId: String, songs: List<WorshipSetSong>) {
+        client.postgrest.rpc(
+            function = "save_worship_set",
+            parameters = buildJsonObject {
+                put("target_activity_id", activityId)
+                put("target_ministry_id", ministryId)
+                putJsonArray("target_songs") {
+                    songs.forEach { song ->
+                        addJsonObject {
+                            put("song_id", song.songId)
+                            put("song_key", song.key)
+                            put("lead_id", song.leadId.orEmpty())
+                        }
+                    }
+                }
+            },
+        )
+    }
+
+    suspend fun createMinistry(currentMember: Member, draft: MinistryDraft) {
+        require(currentMember.isPastor) { "Solo el Pastor/Administrador puede crear ministerios." }
+        client.from("ministries").insert(
+            MinistryInsert(
+                id = UUID.randomUUID().toString(),
+                name = draft.name.trim(),
+                description = draft.description.trim(),
+                createdBy = currentMember.id,
+            ),
+        )
+    }
+
+    suspend fun addMembership(ministryId: String, userId: String, isLeader: Boolean) {
+        client.from("ministry_memberships").insert(
+            SupabaseMembership(ministryId = ministryId, userId = userId, isLeader = isLeader),
+        )
+    }
+
+    suspend fun setMembershipLeader(ministryId: String, userId: String, isLeader: Boolean) {
+        client.from("ministry_memberships").update(MembershipLeaderUpdate(isLeader)) {
+            filter {
+                eq("ministry_id", ministryId)
+                eq("user_id", userId)
+            }
+        }
+    }
+
+    suspend fun removeMembership(ministryId: String, userId: String) {
+        client.from("ministry_memberships").delete {
+            filter {
+                eq("ministry_id", ministryId)
+                eq("user_id", userId)
+            }
+        }
+    }
+
     suspend fun updateProfileAsPastor(
         target: Member,
         fullName: String,
+        phone: String,
         role: String,
         active: Boolean,
     ) {
         val databaseRole = when (role) {
-            "Pastor/Administrador" -> "pastor"
-            "Líder de ministerio" -> "ministry_leader"
-            "Líder normal" -> "leader"
+            Roles.PASTOR -> "pastor"
+            Roles.MINISTRY_LEADER -> "ministry_leader"
+            Roles.LEADER -> "leader"
             else -> error("El rol seleccionado no es válido.")
         }
         client.postgrest.rpc(
@@ -420,7 +698,7 @@ object SupabaseBackend {
             parameters = buildJsonObject {
                 put("target_profile_id", target.id)
                 put("target_full_name", fullName.trim())
-                put("target_phone", target.phone)
+                put("target_phone", phone.trim())
                 put("target_role", databaseRole)
                 put("target_is_active", active)
             },
@@ -428,12 +706,39 @@ object SupabaseBackend {
     }
 }
 
+/** Estados válidos de proyectos, actividades y tareas según los requerimientos. */
+val WORK_STATUSES = listOf("pending", "in_progress", "paused", "completed")
+
+/**
+ * Avance propuesto: una actividad sin tareas vale 100 % solo si está completada;
+ * con tareas, su fracción completada. El proyecto promedia sus actividades y
+ * vale 0 cuando no tiene ninguna.
+ */
+private fun calculateProjectProgress(
+    activities: List<SupabaseActivity>,
+    tasksByActivity: Map<String, List<SupabaseTask>>,
+): Int {
+    if (activities.isEmpty()) return 0
+    return activities.map { activity ->
+        val activityTasks = tasksByActivity[activity.id].orEmpty()
+        if (activityTasks.isEmpty()) {
+            if (activity.status == "completed") 100.0 else 0.0
+        } else {
+            activityTasks.count { it.status == "completed" } * 100.0 / activityTasks.size
+        }
+    }.average().roundToInt().coerceIn(0, 100)
+}
+
 private val MINISTRY_COLORS = listOf(
     0xFF2563EB,
-    0xFF1E3A5F,
-    0xFF5A7A2B,
-    0xFF9A6E1A,
+    0xFF0F766E,
+    0xFF7C3AED,
+    0xFFB45309,
+    0xFFBE185D,
 )
+
+private fun parseTimestamp(value: String): OffsetDateTime? =
+    runCatching { OffsetDateTime.parse(value) }.getOrNull()
 
 private fun String.initials(): String = split(Regex("\\s+"))
     .take(2)
@@ -444,11 +749,27 @@ private fun String.initials(): String = split(Regex("\\s+"))
 private fun String.ministryIcon(): String = when {
     contains("alabanza", ignoreCase = true) -> "♫"
     contains("juventud", ignoreCase = true) -> "⚡"
-    contains("aseo", ignoreCase = true) -> "✦"
+    contains("niñ", ignoreCase = true) -> "☺"
+    contains("mujer", ignoreCase = true) || contains("damas", ignoreCase = true) -> "❀"
     else -> "✝"
 }
 
-private fun SupabaseActivity.toChurchActivity(isAssignedToCurrentUser: Boolean) = ChurchActivity(
+/** La base guarda "scheduled" como estado inicial de actividades y reuniones. */
+private fun String.toEventStatus(): String = if (this == "pending") "scheduled" else this
+
+private fun String.fromEventStatus(): String = if (this == "scheduled") "pending" else this
+
+private fun SupabaseActivity.classification(): Classification = when {
+    activityType == "personal" -> Classification.Individual
+    activityType == "ministry" -> Classification.Ministry
+    projectId != null -> Classification.Project
+    else -> Classification.General
+}
+
+private fun SupabaseActivity.toChurchActivity(
+    assigneeIds: List<String>,
+    isAssignedToCurrentUser: Boolean,
+) = ChurchActivity(
     id = id,
     title = title,
     description = description,
@@ -457,22 +778,23 @@ private fun SupabaseActivity.toChurchActivity(isAssignedToCurrentUser: Boolean) 
     endTime = endTime.take(5),
     ministryId = ministryId,
     location = location,
-    status = status.toEventStatusLabel(),
-    kind = when (kind) {
-        "task" -> "Tarea"
-        "meeting" -> "Reunión"
-        else -> "Actividad"
-    },
+    status = if (kind == "task") taskStatus ?: "pending" else status.fromEventStatus(),
+    kind = if (kind == "task") ItemKind.Task else ItemKind.Activity,
     category = category,
+    classification = classification(),
     projectId = projectId,
     worshipLeaderId = worshipLeaderId,
     preacherId = preacherId,
-    taskStatus = taskStatus,
+    assigneeIds = assigneeIds,
     isAssignedToCurrentUser = isAssignedToCurrentUser,
+    priority = priority,
     isLegacyTask = kind == "task",
 )
 
-private fun SupabaseMeeting.toChurchActivity() = ChurchActivity(
+private fun SupabaseMeeting.toChurchActivity(
+    participantIds: List<String>,
+    isAssignedToCurrentUser: Boolean,
+) = ChurchActivity(
     id = id,
     title = title,
     description = purpose,
@@ -481,33 +803,12 @@ private fun SupabaseMeeting.toChurchActivity() = ChurchActivity(
     endTime = endTime.take(5),
     ministryId = ministryId,
     location = location,
-    status = status.toEventStatusLabel(),
-    kind = "Reunión",
+    status = status.fromEventStatus(),
+    kind = ItemKind.Meeting,
+    classification = if (ministryId != null) Classification.Ministry else Classification.General,
+    assigneeIds = participantIds,
+    isAssignedToCurrentUser = isAssignedToCurrentUser,
 )
-
-private fun String.toEventStatusLabel(): String = when (this) {
-    "completed" -> "Completada"
-    "cancelled" -> "Cancelada"
-    else -> "Programada"
-}
-
-private fun String.toTaskStateLabel(): String = when (this) {
-    "pending" -> "Por hacer"
-    "in_progress" -> "En curso"
-    "paused" -> "En pausa"
-    "completed" -> "Completada"
-    "cancelled" -> "Cancelada"
-    else -> error("El estado de la tarea no está reconocido.")
-}
-
-private fun String.toProjectStatusLabel(): String = when (this) {
-    "pending" -> "Por hacer"
-    "in_progress" -> "En curso"
-    "paused" -> "En pausa"
-    "completed" -> "Completada"
-    "cancelled" -> "Cancelada"
-    else -> error("El estado del proyecto no está reconocido.")
-}
 
 private fun String.isPublicClientKey(): Boolean {
     if (startsWith("sb_publishable_")) return true
@@ -522,6 +823,13 @@ private fun String.isPublicClientKey(): Boolean {
     } catch (_: org.json.JSONException) {
         false
     }
+}
+
+private fun String.toRoleLabel(): String = when (this) {
+    "pastor" -> Roles.PASTOR
+    "ministry_leader" -> Roles.MINISTRY_LEADER
+    "leader" -> Roles.LEADER
+    else -> error("El rol de esta cuenta no está reconocido.")
 }
 
 @Serializable
@@ -554,12 +862,11 @@ private data class SupabaseProject(
     val name: String,
     val objective: String = "",
     val description: String,
-    @SerialName("ministry_id") val ministryId: String? = null,
     @SerialName("leader_id") val leaderId: String,
+    @SerialName("start_date") val startDate: String,
     @SerialName("due_date") val dueDate: String,
     val budget: Double? = null,
     @SerialName("budget_executed") val budgetExecuted: Double? = null,
-    val progress: Int,
     val status: String,
 )
 
@@ -572,10 +879,12 @@ private data class SupabaseActivity(
     @SerialName("start_time") val startTime: String,
     @SerialName("end_time") val endTime: String,
     @SerialName("ministry_id") val ministryId: String? = null,
+    @SerialName("activity_type") val activityType: String = "general",
     val location: String,
     val status: String,
     val kind: String,
     val category: String = "",
+    val priority: String? = null,
     @SerialName("project_id") val projectId: String? = null,
     @SerialName("worship_leader_id") val worshipLeaderId: String? = null,
     @SerialName("preacher_id") val preacherId: String? = null,
@@ -592,11 +901,13 @@ private data class SupabaseTask(
     @SerialName("due_at") val dueAt: String? = null,
     val priority: String,
     val status: String,
+    val comments: String = "",
 )
 
 @Serializable
 private data class SupabaseActivityAssignment(
     @SerialName("activity_id") val activityId: String,
+    @SerialName("user_id") val userId: String,
 )
 
 @Serializable
@@ -613,10 +924,35 @@ private data class SupabaseMeeting(
 )
 
 @Serializable
+private data class SupabaseMeetingParticipant(
+    @SerialName("meeting_id") val meetingId: String,
+    @SerialName("user_id") val userId: String,
+)
+
+@Serializable
 private data class SupabaseSong(
+    val id: String,
     val title: String,
     val artist: String,
     @SerialName("default_key") val defaultKey: String,
+    @SerialName("reference_url") val referenceUrl: String = "",
+)
+
+@Serializable
+private data class SupabaseWorshipSet(
+    val id: String,
+    @SerialName("activity_id") val activityId: String,
+    @SerialName("director_id") val directorId: String,
+    @SerialName("updated_at") val updatedAt: String? = null,
+)
+
+@Serializable
+private data class SupabaseWorshipSetSong(
+    @SerialName("set_id") val setId: String,
+    @SerialName("song_id") val songId: String,
+    val position: Int,
+    @SerialName("song_key") val songKey: String,
+    @SerialName("lead_id") val leadId: String? = null,
 )
 
 @Serializable
@@ -639,13 +975,21 @@ private data class ProjectInsert(
     @SerialName("due_date") val dueDate: String,
     val budget: Long?,
     @SerialName("budget_executed") val budgetExecuted: Long?,
+    val status: String,
     @SerialName("created_by") val createdBy: String,
 )
 
 @Serializable
 private data class ProjectUpdatePayload(
-    val status: String,
+    val name: String,
+    val objective: String,
+    val description: String,
+    @SerialName("leader_id") val leaderId: String,
+    @SerialName("start_date") val startDate: String,
+    @SerialName("due_date") val dueDate: String,
+    val budget: Long?,
     @SerialName("budget_executed") val budgetExecuted: Long?,
+    val status: String,
 )
 
 @Serializable
@@ -664,10 +1008,11 @@ private data class ActivityInsert(
     @SerialName("project_id") val projectId: String?,
     @SerialName("worship_leader_id") val worshipLeaderId: String?,
     @SerialName("preacher_id") val preacherId: String?,
-    val priority: String?,
-    @SerialName("task_status") val taskStatus: String?,
     @SerialName("created_by") val createdBy: String,
 )
+
+@Serializable
+private data class ActivityStatusUpdate(val status: String)
 
 @Serializable
 private data class ActivityAssignmentInsert(
@@ -715,6 +1060,7 @@ private data class TaskInsert(
     @SerialName("due_at") val dueAt: String?,
     val priority: String,
     val status: String,
+    val comments: String,
     @SerialName("assigned_by") val assignedBy: String,
 )
 
@@ -728,12 +1074,69 @@ private data class WorshipSongInsert(
     val title: String,
     val artist: String,
     @SerialName("default_key") val defaultKey: String,
+    @SerialName("reference_url") val referenceUrl: String,
     @SerialName("created_by") val createdBy: String,
 )
 
-private fun String.toRoleLabel(): String = when (this) {
-    "pastor" -> "Pastor/Administrador"
-    "ministry_leader" -> "Líder de ministerio"
-    "leader" -> "Líder normal"
-    else -> error("El rol de esta cuenta no está reconocido.")
-}
+@Serializable
+private data class MinistryInsert(
+    val id: String,
+    val name: String,
+    val description: String,
+    @SerialName("created_by") val createdBy: String,
+)
+
+@Serializable
+private data class SupabaseMeetingRecord(
+    val id: String,
+    @SerialName("meeting_id") val meetingId: String? = null,
+    val title: String,
+    @SerialName("record_date") val recordDate: String,
+    val summary: String = "",
+    val visibility: String,
+    @SerialName("ministry_id") val ministryId: String? = null,
+)
+
+@Serializable
+private data class MeetingRecordInsert(
+    val id: String,
+    @SerialName("meeting_id") val meetingId: String?,
+    val title: String,
+    @SerialName("record_date") val recordDate: String,
+    val summary: String,
+    val visibility: String,
+    @SerialName("ministry_id") val ministryId: String?,
+    @SerialName("created_by") val createdBy: String,
+)
+
+@Serializable
+private data class SupabaseRecordViewer(
+    @SerialName("record_id") val recordId: String,
+    @SerialName("user_id") val userId: String,
+)
+
+@Serializable
+private data class SupabaseRecordFile(
+    val id: String,
+    @SerialName("record_id") val recordId: String,
+    @SerialName("file_name") val fileName: String,
+    @SerialName("content_type") val contentType: String,
+    @SerialName("size_bytes") val sizeBytes: Long,
+    @SerialName("object_path") val objectPath: String,
+)
+
+@Serializable
+private data class RecordFileInsert(
+    val id: String,
+    @SerialName("record_id") val recordId: String,
+    @SerialName("file_name") val fileName: String,
+    @SerialName("content_type") val contentType: String,
+    @SerialName("size_bytes") val sizeBytes: Long,
+    @SerialName("object_path") val objectPath: String,
+    @SerialName("uploaded_by") val uploadedBy: String,
+)
+
+@Serializable
+private data class MembershipLeaderUpdate(
+    @SerialName("is_leader") val isLeader: Boolean,
+)

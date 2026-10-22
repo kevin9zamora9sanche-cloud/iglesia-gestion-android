@@ -53,6 +53,22 @@ Las migraciones se aplican por timestamp y en este orden:
 7. `migrations/20261014110000_separate_tasks_from_activities.sql`
 8. `migrations/20261014120000_enable_ministry_responsible_selection.sql`
 9. `migrations/20261014130000_backfill_unambiguous_legacy_tasks.sql`
+10. `migrations/20261022100000_align_status_progress_worship_and_notifications.sql`
+11. `migrations/20261022110000_meeting_records_and_files.sql`
+
+La migración 11 crea los registros posteriores a reuniones (`meeting_records`),
+separados de las convocatorias, con visibilidad para toda la iglesia, un
+ministerio o personas seleccionadas; sus archivos (`meeting_record_files`) y el
+bucket privado `meeting-records` (PDF, JPG o PNG, máximo 5 MB). Las descargas
+siguen los permisos del registro y solo el Pastor crea, adjunta o elimina.
+
+La migración 10 agrega los estados de actividad En curso/En pausa, recalcula
+automáticamente el avance de los proyectos, permite que predicador y director
+vean su Culto, guarda el repertorio de forma atómica (`save_worship_set`) con un
+solo aviso por cambio, notifica asignaciones de culto, invitaciones y cambios de
+reuniones, cambios de horario y de proyectos, y registra el detalle en la
+auditoría avisando al Pastor de las eliminaciones. La app Android la necesita
+para cambiar estados de actividades y editar repertorios.
 
 El último backfill solo migra tareas antiguas con actividad padre y una única
 persona responsable identificables; conserva sin cambios las ambiguas, las
