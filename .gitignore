@@ -6,3 +6,6 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+
+# Configuración local de editores
+.vscode/
