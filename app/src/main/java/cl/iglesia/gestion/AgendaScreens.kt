@@ -558,7 +558,7 @@ fun ActivityDetailSheet(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             when {
-                                item.isMeeting -> "Invitados"
+                                item.isMeeting || item.category == ActivityTypes.ENSAYO -> "Invitados"
                                 item.isTask -> "Responsable"
                                 else -> "Responsables"
                             },

@@ -3,6 +3,7 @@ package cl.iglesia.gestion
 import android.util.Base64
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.gotrue.Auth
+import io.github.jan.supabase.gotrue.OtpType
 import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
@@ -895,6 +896,26 @@ object SupabaseBackend {
 
     suspend fun sendPasswordReset(email: String) {
         client.auth.resetPasswordForEmail(email.trim())
+    }
+
+    /**
+     * Recuperación con el código del correo: valida el código (inicia la sesión) y
+     * guarda la contraseña nueva. Requiere que la plantilla "Reset Password" de
+     * Supabase incluya {{ .Token }}.
+     */
+    suspend fun completePasswordRecovery(email: String, code: String, newPassword: String) {
+        passwordProblem(newPassword)?.let { throw UserFacingException(it) }
+        client.auth.verifyEmailOtp(type = OtpType.Email.RECOVERY, email = email.trim(), token = code.trim())
+        try {
+            client.auth.updateUser { password = newPassword }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudo guardar la contraseña nueva", error)
+            throw UserFacingException(
+                "El código era correcto, pero no se pudo guardar la contraseña nueva. Cámbiala en Más › Cambiar mi contraseña.",
+            )
+        }
     }
 
     suspend fun changeOwnPassword(password: String) {

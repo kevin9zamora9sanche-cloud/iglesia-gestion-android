@@ -174,6 +174,8 @@ private fun ChurchApp() {
     var confirmLogout by remember { mutableStateOf(false) }
     /** La sesión sigue guardada, pero no se pudo cargar el perfil por falta de conexión. */
     var connectionError by remember { mutableStateOf(false) }
+    /** Ya se envió el código de recuperación: la pantalla pide código y nueva contraseña. */
+    var resetCodeSent by rememberSaveable { mutableStateOf(false) }
 
     suspend fun reload(member: Member) {
         modulesLoading = true
@@ -271,7 +273,10 @@ private fun ChurchApp() {
         member == null -> LoginScreen(
             message = authMessage,
             loading = authLoading,
-            onModeChange = { authMessage = null },
+            onModeChange = {
+                authMessage = null
+                resetCodeSent = false
+            },
             onLogin = { email, password ->
                 coroutineScope.launch {
                     authLoading = true
@@ -295,11 +300,33 @@ private fun ChurchApp() {
                     authMessage = null
                     try {
                         SupabaseBackend.client.auth.resetPasswordForEmail(email)
-                        authMessage = "Si el correo está registrado, recibirás instrucciones para restablecer la contraseña." to false
+                        resetCodeSent = true
+                        authMessage = "Si el correo está registrado, te llegará un código. Escríbelo abajo junto con tu nueva contraseña." to false
                     } catch (error: CancellationException) {
                         throw error
                     } catch (_: Exception) {
                         authMessage = "No fue posible solicitar el restablecimiento. Revisa tu conexión e inténtalo de nuevo." to true
+                    } finally {
+                        authLoading = false
+                    }
+                }
+            },
+            resetCodeSent = resetCodeSent,
+            onConfirmReset = { email, code, newPassword ->
+                coroutineScope.launch {
+                    authLoading = true
+                    authMessage = null
+                    try {
+                        SupabaseBackend.completePasswordRecovery(email, code, newPassword)
+                        resetCodeSent = false
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        android.util.Log.w("ChurchApp", "Recuperación rechazada", error)
+                        authMessage = (
+                            (error as? UserFacingException)?.message
+                                ?: "El código no es válido o ya venció. Pide uno nuevo e inténtalo otra vez."
+                            ) to true
                     } finally {
                         authLoading = false
                     }
@@ -991,14 +1018,30 @@ private fun LoginScreen(
     onModeChange: () -> Unit,
     onLogin: (String, String) -> Unit,
     onResetPassword: (String) -> Unit,
+    resetCodeSent: Boolean = false,
+    onConfirmReset: (email: String, code: String, newPassword: String) -> Unit = { _, _, _ -> },
 ) {
     var email by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var resetMode by rememberSaveable { mutableStateOf(false) }
+    var code by rememberSaveable { mutableStateOf("") }
     val emailValid = android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()
-    val canSubmit = !loading && emailValid && (resetMode || password.isNotBlank())
-    val submit = { if (resetMode) onResetPassword(email.trim()) else onLogin(email.trim(), password) }
+    // Paso 2 de la recuperación: código del correo y contraseña nueva.
+    val confirmingReset = resetMode && resetCodeSent
+    val passwordIssue = if (confirmingReset && password.isNotEmpty()) passwordProblem(password) else null
+    val canSubmit = !loading && emailValid && when {
+        confirmingReset -> code.length >= 6 && password.isNotEmpty() && passwordIssue == null
+        resetMode -> true
+        else -> password.isNotBlank()
+    }
+    val submit = {
+        when {
+            confirmingReset -> onConfirmReset(email.trim(), code, password)
+            resetMode -> onResetPassword(email.trim())
+            else -> onLogin(email.trim(), password)
+        }
+    }
 
     Box(
         Modifier
@@ -1035,8 +1078,10 @@ private fun LoginScreen(
                         color = Brand,
                     )
                     Text(
-                        if (resetMode) {
-                            "Te enviaremos un enlace al correo de tu cuenta."
+                        if (confirmingReset) {
+                            "Revisa tu correo. Escribe el código que te enviamos y elige una contraseña nueva."
+                        } else if (resetMode) {
+                            "Te enviaremos un código al correo de tu cuenta."
                         } else {
                             "Usa el correo y la contraseña que te entregó la administración."
                         },
@@ -1061,14 +1106,32 @@ private fun LoginScreen(
                         ),
                         keyboardActions = KeyboardActions(onDone = { if (canSubmit) submit() }),
                         shape = MaterialTheme.shapes.medium,
-                        enabled = !loading,
+                        enabled = !loading && !confirmingReset,
                     )
-                    if (!resetMode) {
+                    if (confirmingReset) {
+                        OutlinedTextField(
+                            value = code,
+                            onValueChange = { value -> code = value.filter(Char::isDigit).take(10) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Código del correo") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Next),
+                            shape = MaterialTheme.shapes.medium,
+                            enabled = !loading,
+                        )
+                    }
+                    if (!resetMode || confirmingReset) {
                         OutlinedTextField(
                             value = password,
                             onValueChange = { password = it },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Contraseña") },
+                            label = { Text(if (confirmingReset) "Nueva contraseña" else "Contraseña") },
+                            isError = passwordIssue != null,
+                            supportingText = if (confirmingReset) {
+                                { Text(passwordIssue ?: "Mínimo 8 caracteres, con al menos una letra y un número.") }
+                            } else {
+                                null
+                            },
                             singleLine = true,
                             visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = {
@@ -1099,7 +1162,13 @@ private fun LoginScreen(
                             Spacer(Modifier.width(10.dp))
                             Text("Conectando…")
                         } else {
-                            Text(if (resetMode) "Enviar instrucciones" else "Ingresar")
+                            Text(
+                                when {
+                                    confirmingReset -> "Cambiar contraseña"
+                                    resetMode -> "Enviar código"
+                                    else -> "Ingresar"
+                                },
+                            )
                         }
                     }
                     TextButton(
@@ -1111,6 +1180,13 @@ private fun LoginScreen(
                         modifier = Modifier.align(Alignment.CenterHorizontally),
                     ) {
                         Text(if (resetMode) "Volver al inicio de sesión" else "¿Olvidaste tu contraseña?")
+                    }
+                    if (confirmingReset) {
+                        TextButton(
+                            onClick = { onResetPassword(email.trim()) },
+                            enabled = !loading,
+                            modifier = Modifier.align(Alignment.CenterHorizontally),
+                        ) { Text("No me llegó el código: enviar otro") }
                     }
                 }
             }

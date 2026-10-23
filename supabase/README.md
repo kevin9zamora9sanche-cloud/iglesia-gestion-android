@@ -59,6 +59,7 @@ Las migraciones se aplican por timestamp y en este orden:
 13. `migrations/20261023120000_revoke_trigger_function_rpc.sql`
 14. `migrations/20261023130000_worship_song_files.sql`
 15. `migrations/20261023140000_reusable_ministry_repertoire.sql`
+16. `migrations/20261023150000_reminders_and_critical_audit.sql`
 
 La migración 12 agrega `admin_list_users()`, que muestra al Pastor el correo y
 el último acceso de cada cuenta. La migración 13 retira el permiso de ejecutar
@@ -72,6 +73,26 @@ ministerio (`worship_sets` con `activity_id` nulo) que se guarda con
 `save_ministry_repertoire()`; cada guardado envía un solo aviso a Alabanza, al
 Pastor y a predicadores y directores de los próximos cultos. Los repertorios por
 Culto anteriores se conservan, pero la app ya no los crea.
+
+La migración 16 activa `pg_cron` y programa `send_upcoming_reminders()` todos los
+días a las 11:00 UTC: avisa de las actividades, cultos, ensayos, reuniones y
+tareas del día siguiente, sin repetir avisos. También registra en `audit_logs`
+los cambios de rol, la activación o desactivación de cuentas y los cambios de
+ministerios, y avisa a los Pastores.
+
+### Recuperación de contraseña (configuración en el panel)
+
+La app pide el código que llega por correo y la contraseña nueva. Para que
+funcione, en el panel de Supabase:
+
+1. **Authentication › Emails › Reset Password:** incluye el código en la
+   plantilla, por ejemplo: `Tu código para recuperar la contraseña es: {{ .Token }}`.
+2. **Authentication › Emails › SMTP Settings:** configura un SMTP propio. El
+   correo integrado de Supabase solo entrega a miembros del equipo del proyecto
+   y tiene un límite de pocos correos por hora.
+
+Mientras tanto, el Pastor puede asignar una contraseña temporal desde
+Más › Usuarios.
 
 ### Función `admin-users` (administración de cuentas)
 

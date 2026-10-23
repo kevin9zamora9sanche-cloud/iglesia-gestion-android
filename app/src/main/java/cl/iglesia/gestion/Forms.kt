@@ -292,7 +292,8 @@ fun ActivityForm(
             )
         }
 
-        FieldLabel("Responsables", required = true)
+        // En un Ensayo, las personas elegidas son las invitadas: lo verán en su agenda personal.
+        FieldLabel(if (category == ActivityTypes.ENSAYO) "Invitados al ensayo" else "Responsables", required = true)
         if (classification == Classification.Ministry && ministryId == null) {
             Text("Elige primero el ministerio.", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
         } else {
