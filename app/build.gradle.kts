@@ -69,7 +69,7 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:storage-kt")
     implementation("io.github.jan-tennert.supabase:functions-kt")
     implementation("io.ktor:ktor-client-android:2.3.12")
-    implementation(files("libs\\json-20230227.jar"))
+    implementation(files("libs/json-20230227.jar"))
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

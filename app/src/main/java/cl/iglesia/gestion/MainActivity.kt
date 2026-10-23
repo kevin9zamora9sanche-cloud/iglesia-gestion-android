@@ -291,6 +291,10 @@ private fun ChurchApp() {
             /** Ejecuta una escritura, recarga los datos y solo informa éxito si persistió. */
             fun perform(successMessage: String, closeForm: Boolean = true, block: suspend () -> Unit) {
                 if (submitting) return
+                // El aviso se muestra aparte para no dejar los botones deshabilitados mientras está visible.
+                fun notify(message: String) {
+                    coroutineScope.launch { snackbar.showSnackbar(message) }
+                }
                 coroutineScope.launch {
                     submitting = true
                     formError = null
@@ -298,7 +302,7 @@ private fun ChurchApp() {
                         block()
                         if (closeForm) openForm = null
                         reload(member)
-                        snackbar.showSnackbar(successMessage)
+                        notify(successMessage)
                     } catch (error: CancellationException) {
                         throw error
                     } catch (error: Exception) {
@@ -309,11 +313,11 @@ private fun ChurchApp() {
                             // Guardado parcial: se cierra el formulario y se recarga para mostrar lo persistido.
                             openForm = null
                             reload(member)
-                            snackbar.showSnackbar(detail)
+                            notify(detail)
                         } else if (openForm != null) {
                             formError = detail
                         } else {
-                            snackbar.showSnackbar(detail)
+                            notify(detail)
                         }
                     } finally {
                         submitting = false

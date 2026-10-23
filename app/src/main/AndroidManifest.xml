@@ -3,6 +3,9 @@
 
     <application
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="Gestión Iglesia"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">

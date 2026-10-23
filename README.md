@@ -286,8 +286,13 @@ Reglas del proyecto:
   de canciones con enlace a la versión de referencia.
 - **Registros de reuniones** con resumen, visibilidad y archivos PDF/JPG/PNG de
   hasta 5 MB.
+- **Ministerios (Pastor):** crear, editar, desactivar y reactivar. Un ministerio
+  desactivado se oculta al resto, pero conserva integrantes y registros.
 - **Usuarios (Pastor):** crear cuentas, roles, ministerios, activar o desactivar
-  y restablecer contraseñas. Cada usuario puede cambiar la suya.
+  y restablecer contraseñas. Al crear una cuenta se muestran el correo y la
+  contraseña temporal para entregarlos en persona. Cada usuario puede cambiar la suya.
+- **Accesibilidad:** letra ampliada (texto principal de 18 sp) y botones grandes,
+  pensados para personas mayores.
 - **Avisos** dentro de la app para asignaciones, cambios de agenda, repertorios,
   reuniones y proyectos.
 

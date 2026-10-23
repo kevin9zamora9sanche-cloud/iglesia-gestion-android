@@ -56,9 +56,12 @@ Las migraciones se aplican por timestamp y en este orden:
 10. `migrations/20261022100000_align_status_progress_worship_and_notifications.sql`
 11. `migrations/20261022110000_meeting_records_and_files.sql`
 12. `migrations/20261023100000_admin_user_directory.sql`
+13. `migrations/20261023120000_revoke_trigger_function_rpc.sql`
 
 La migración 12 agrega `admin_list_users()`, que muestra al Pastor el correo y
-el último acceso de cada cuenta.
+el último acceso de cada cuenta. La migración 13 retira el permiso de ejecutar
+como RPC las funciones de trigger `handle_new_user()` y `rls_auto_enable()`;
+los triggers siguen funcionando igual.
 
 ### Función `admin-users` (administración de cuentas)
 

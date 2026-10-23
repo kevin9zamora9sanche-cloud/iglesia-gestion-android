@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cruz dorada centrada dentro de la zona segura (66 dp) del ícono adaptativo. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#C9A84C"
+        android:pathData="M49,30h10v14h12v10h-12v24h-10v-24h-12v-10h12z" />
+</vector>
