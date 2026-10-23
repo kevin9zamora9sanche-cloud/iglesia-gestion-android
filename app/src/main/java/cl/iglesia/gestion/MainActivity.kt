@@ -107,6 +107,7 @@ sealed interface FormRequest {
     data object Meeting : FormRequest
     data class Task(val activityId: String?) : FormRequest
     data object Song : FormRequest
+    data class EditSong(val songId: String) : FormRequest
     data object NewMinistry : FormRequest
     data class EditMinistry(val ministry: Ministry) : FormRequest
     data class Profile(val member: Member) : FormRequest
@@ -171,6 +172,8 @@ private fun ChurchApp() {
     /** Correo y contraseña temporal de la última cuenta creada, para entregarlos en persona. */
     var createdAccount by remember { mutableStateOf<Pair<String, String>?>(null) }
     var confirmLogout by remember { mutableStateOf(false) }
+    /** La sesión sigue guardada, pero no se pudo cargar el perfil por falta de conexión. */
+    var connectionError by remember { mutableStateOf(false) }
 
     suspend fun reload(member: Member) {
         modulesLoading = true
@@ -184,6 +187,41 @@ private fun ChurchApp() {
             moduleError = LOAD_ERROR
         } finally {
             modulesLoading = false
+        }
+    }
+
+    /**
+     * Carga el perfil de la sesión guardada. Solo cierra la sesión si el servidor
+     * rechaza la cuenta; un problema de red la conserva y ofrece reintentar, para no
+     * obligar a escribir otra vez la contraseña por una conexión lenta.
+     */
+    suspend fun loadSessionMember() {
+        authLoading = true
+        connectionError = false
+        try {
+            val member = SupabaseBackend.loadCurrentMember()
+            currentMember = member
+            authMessage = null
+            reload(member)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("ChurchApp", "No se pudo cargar el perfil", error)
+            currentMember = null
+            val rejected = error is io.github.jan.supabase.exceptions.RestException ||
+                error.message?.startsWith("Esta cuenta") == true
+            if (rejected) {
+                authMessage = (
+                    error.message?.takeIf { it.startsWith("Esta cuenta") }
+                        ?: "No se pudo cargar tu perfil. Verifica la cuenta y sus permisos."
+                    ) to true
+                SupabaseBackend.client.auth.signOut()
+            } else {
+                connectionError = true
+            }
+        } finally {
+            authLoading = false
+            sessionChecked = true
         }
     }
 
@@ -211,27 +249,7 @@ private fun ChurchApp() {
                         authMessage = "No se pudo validar la sesión. Revisa tu conexión e inténtalo de nuevo." to true
                     }
                 }
-                is SessionStatus.Authenticated -> {
-                    authLoading = true
-                    try {
-                        val member = SupabaseBackend.loadCurrentMember()
-                        currentMember = member
-                        authMessage = null
-                        reload(member)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        currentMember = null
-                        authMessage = (
-                            error.message?.takeIf { it.startsWith("Esta cuenta") }
-                                ?: "No se pudo cargar tu perfil. Verifica la cuenta y sus permisos."
-                            ) to true
-                        SupabaseBackend.client.auth.signOut()
-                    } finally {
-                        authLoading = false
-                        sessionChecked = true
-                    }
-                }
+                is SessionStatus.Authenticated -> loadSessionMember()
             }
         }
     }
@@ -240,6 +258,16 @@ private fun ChurchApp() {
     when {
         !SupabaseBackend.isConfigured -> SupabaseConfigurationScreen()
         !sessionChecked && member == null -> LoadingScreen()
+        member == null && connectionError -> ConnectionErrorScreen(
+            loading = authLoading,
+            onRetry = { coroutineScope.launch { loadSessionMember() } },
+            onSignOut = {
+                coroutineScope.launch {
+                    connectionError = false
+                    runCatching { SupabaseBackend.client.auth.signOut() }
+                }
+            },
+        )
         member == null -> LoginScreen(
             message = authMessage,
             loading = authLoading,
@@ -515,6 +543,12 @@ private fun ChurchApp() {
                                             perform("Archivo eliminado", closeForm = false) { SupabaseBackend.deleteSongFile(file) }
                                         },
                                         onError = { message -> coroutineScope.launch { snackbar.showSnackbar(message) } },
+                                        onEditSong = { song -> openFormRequest(FormRequest.EditSong(song.id)) },
+                                        onDeleteSong = { song ->
+                                            perform("\"${song.title}\" se eliminó del catálogo", closeForm = false) {
+                                                SupabaseBackend.deleteWorshipSong(song, snapshot?.worshipSets.orEmpty())
+                                            }
+                                        },
                                     )
                                     MorePage.Records -> RecordsScreen(
                                         member = member,
@@ -681,6 +715,34 @@ private fun ChurchApp() {
                         }
                     },
                 )
+                is FormRequest.EditSong -> {
+                    val song = snapshot?.songs.orEmpty().firstOrNull { it.id == request.songId }
+                    if (song == null) {
+                        LaunchedEffect(request) { openForm = null }
+                    } else {
+                        SongForm(
+                            existing = song,
+                            submitting = submitting,
+                            error = formError,
+                            onDismiss = { openForm = null },
+                            onSubmit = { draft, files ->
+                                perform("Canción actualizada") {
+                                    SupabaseBackend.updateWorshipSong(song.id, draft)
+                                    val failed = files.filter { file ->
+                                        runCatching { SupabaseBackend.uploadSongFile(member, song.id, file) }
+                                            .onFailure { if (it is CancellationException) throw it }
+                                            .isFailure
+                                    }
+                                    if (failed.isNotEmpty()) {
+                                        throw PartialSaveException(
+                                            "Los cambios se guardaron, pero no se pudieron adjuntar: ${failed.joinToString { it.name }}.",
+                                        )
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
                 FormRequest.NewMinistry -> MinistryForm(
                     submitting = submitting,
                     error = formError,
@@ -1094,6 +1156,48 @@ private fun LoadingScreen() {
         CircularProgressIndicator(color = Color.White, trackColor = Color.White.copy(alpha = 0.2f))
         Spacer(Modifier.height(16.dp))
         Text("Cargando tu cuenta…", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** Sin conexión al abrir la app: la sesión se conserva y se puede reintentar. */
+@Composable
+private fun ConnectionErrorScreen(loading: Boolean, onRetry: () -> Unit, onSignOut: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(Brand).padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("✝", color = Gold, fontSize = 40.sp)
+        Spacer(Modifier.height(20.dp))
+        Text(
+            "No hay conexión",
+            color = Color.White,
+            style = MaterialTheme.typography.headlineSmall,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "No pudimos comunicarnos con el servidor. Revisa tu internet y vuelve a intentarlo. Tu sesión sigue abierta.",
+            color = Color.White.copy(alpha = 0.9f),
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        Spacer(Modifier.height(24.dp))
+        androidx.compose.material3.Button(
+            onClick = onRetry,
+            enabled = !loading,
+            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Brand),
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+        ) {
+            if (loading) {
+                CircularProgressIndicator(color = Brand, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+            } else {
+                Text("Reintentar")
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        androidx.compose.material3.TextButton(onClick = onSignOut, enabled = !loading) {
+            Text("Cerrar sesión", color = Color.White)
+        }
     }
 }
 

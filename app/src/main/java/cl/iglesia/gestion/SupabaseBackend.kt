@@ -692,6 +692,41 @@ object SupabaseBackend {
         }
     }
 
+    suspend fun updateWorshipSong(songId: String, draft: WorshipSongDraft) {
+        client.from("worship_songs").update(
+            WorshipSongUpdate(
+                title = draft.title.trim(),
+                artist = draft.artist.trim(),
+                defaultKey = draft.defaultKey.trim(),
+                referenceUrl = draft.referenceUrl.trim(),
+            ),
+        ) {
+            filter { eq("id", songId) }
+        }
+    }
+
+    /**
+     * Elimina una canción y sus archivos. Una canción usada en algún repertorio no se
+     * puede eliminar (la base lo impide para conservar el historial de los cultos).
+     */
+    suspend fun deleteWorshipSong(song: WorshipSong, worshipSets: List<WorshipSet>) {
+        val uses = worshipSets.count { set -> set.songs.any { it.songId == song.id } }
+        if (uses > 0) {
+            throw UserFacingException(
+                "\"${song.title}\" está en el repertorio de " +
+                    (if (uses == 1) "1 culto" else "$uses cultos") +
+                    ", por lo que no se puede eliminar. Puedes editar sus datos.",
+            )
+        }
+        // Los objetos de Storage se borran antes: su permiso depende de que la canción exista.
+        if (song.files.isNotEmpty()) {
+            client.storage.from(SONGS_BUCKET).delete(song.files.map(RecordFile::objectPath))
+        }
+        client.from("worship_songs").delete {
+            filter { eq("id", song.id) }
+        }
+    }
+
     suspend fun uploadSongFile(currentMember: Member, songId: String, file: PickedFile) {
         val extension = ALLOWED_FILE_TYPES[file.contentType]
             ?: throw UserFacingException("Solo se permiten archivos PDF, JPG o PNG.")
@@ -1373,6 +1408,14 @@ private data class SupabaseRecordFile(
     @SerialName("content_type") val contentType: String,
     @SerialName("size_bytes") val sizeBytes: Long,
     @SerialName("object_path") val objectPath: String,
+)
+
+@Serializable
+private data class WorshipSongUpdate(
+    val title: String,
+    val artist: String,
+    @SerialName("default_key") val defaultKey: String,
+    @SerialName("reference_url") val referenceUrl: String,
 )
 
 @Serializable

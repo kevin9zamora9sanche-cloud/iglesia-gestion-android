@@ -162,9 +162,12 @@ fun WorshipScreen(
     onAddSongFiles: (WorshipSong, List<PickedFile>) -> Unit = { _, _ -> },
     onDeleteSongFile: (RecordFile) -> Unit = {},
     onError: (String) -> Unit = {},
+    onEditSong: (WorshipSong) -> Unit = {},
+    onDeleteSong: (WorshipSong) -> Unit = {},
 ) {
     val today = LocalDate.now()
     var attachTo by androidx.compose.runtime.remember { mutableStateOf<WorshipSong?>(null) }
+    var deletingSong by androidx.compose.runtime.remember { mutableStateOf<WorshipSong?>(null) }
     var deletingFile by androidx.compose.runtime.remember { mutableStateOf<RecordFile?>(null) }
     val pickFiles = rememberFilePicker(
         onPicked = { files -> attachTo?.let { onAddSongFiles(it, files) } },
@@ -305,6 +308,19 @@ fun WorshipScreen(
                                 Spacer(Modifier.width(8.dp))
                                 Text("Adjuntar partitura o letra")
                             }
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                androidx.compose.material3.OutlinedButton(
+                                    onClick = { onEditSong(song) },
+                                    enabled = !submitting,
+                                    modifier = Modifier.weight(1f).heightIn(min = 56.dp),
+                                ) { Text("Editar") }
+                                androidx.compose.material3.OutlinedButton(
+                                    onClick = { deletingSong = song },
+                                    enabled = !submitting,
+                                    modifier = Modifier.weight(1f).heightIn(min = 56.dp),
+                                ) { Text("Eliminar", color = Danger) }
+                            }
                         }
                     }
                 }
@@ -324,6 +340,21 @@ fun WorshipScreen(
         }
     }
 
+    deletingSong?.let { song ->
+        ConfirmDialog(
+            title = "¿Eliminar \"${song.title}\"?",
+            message = "Se quitará del catálogo" +
+                (if (song.files.isEmpty()) "" else " junto con sus ${song.files.size} archivo(s)") +
+                ". Esta acción no se puede deshacer.",
+            confirmLabel = "Eliminar",
+            destructive = true,
+            onDismiss = { deletingSong = null },
+            onConfirm = {
+                deletingSong = null
+                onDeleteSong(song)
+            },
+        )
+    }
     deletingFile?.let { file ->
         ConfirmDialog(
             title = "¿Eliminar el archivo?",

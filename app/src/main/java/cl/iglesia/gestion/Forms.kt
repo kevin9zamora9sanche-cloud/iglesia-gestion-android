@@ -490,12 +490,15 @@ fun SongForm(
     error: String?,
     onDismiss: () -> Unit,
     onSubmit: (WorshipSongDraft, List<PickedFile>) -> Unit,
+    existing: WorshipSong? = null,
 ) {
-    var title by rememberSaveable { mutableStateOf("") }
-    var artist by rememberSaveable { mutableStateOf("") }
-    var key by rememberSaveable { mutableStateOf("C") }
-    var minor by rememberSaveable { mutableStateOf(false) }
-    var link by rememberSaveable { mutableStateOf("") }
+    // La tonalidad se guarda como "A" o "Am": se separa la nota del modo menor.
+    val existingMinor = existing?.defaultKey?.endsWith("m") == true
+    var title by rememberSaveable { mutableStateOf(existing?.title.orEmpty()) }
+    var artist by rememberSaveable { mutableStateOf(existing?.artist.orEmpty()) }
+    var key by rememberSaveable { mutableStateOf(existing?.defaultKey?.removeSuffix("m")?.ifBlank { null } ?: "C") }
+    var minor by rememberSaveable { mutableStateOf(existingMinor) }
+    var link by rememberSaveable { mutableStateOf(existing?.referenceUrl.orEmpty()) }
     var files by remember { mutableStateOf(listOf<PickedFile>()) }
     var pickError by remember { mutableStateOf<String?>(null) }
     val pickFiles = rememberFilePicker(
@@ -507,8 +510,8 @@ fun SongForm(
     )
     val linkValid = link.isBlank() || link.trim().startsWith("https://")
     FullScreenForm(
-        title = "Agregar canción",
-        confirmLabel = "Agregar al catálogo",
+        title = if (existing == null) "Agregar canción" else "Editar canción",
+        confirmLabel = if (existing == null) "Agregar al catálogo" else "Guardar cambios",
         canConfirm = title.isNotBlank() && linkValid,
         submitting = submitting,
         error = error,
@@ -528,9 +531,13 @@ fun SongForm(
             isError = !linkValid,
             supportingText = if (linkValid) "Opcional. Por ejemplo, un enlace de YouTube." else "El enlace debe comenzar con https://",
         )
-        FieldLabel("Archivos de la canción")
+        FieldLabel(if (existing == null) "Archivos de la canción" else "Agregar más archivos")
         Text(
-            "Partitura, letra o acordes. PDF, JPG o PNG, hasta 5 MB cada uno.",
+            if (existing == null || existing.files.isEmpty()) {
+                "Partitura, letra o acordes. PDF, JPG o PNG, hasta 5 MB cada uno."
+            } else {
+                "Ya tiene ${existing.files.size} archivo(s); se abren o eliminan desde el catálogo. PDF, JPG o PNG, hasta 5 MB cada uno."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = TextMuted,
         )

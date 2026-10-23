@@ -285,7 +285,8 @@ Reglas del proyecto:
 - **Alabanza:** repertorio de cada culto (orden, tono, quién dirige) y catálogo
   de canciones con título, artista, tonalidad, enlace a la versión de referencia
   y archivos (partitura, letra o acordes en PDF/JPG/PNG de hasta 5 MB). El Pastor
-  y los líderes de Alabanza registran canciones y archivos; todos pueden verlos.
+  y los líderes de Alabanza registran, editan y eliminan canciones y archivos;
+  todos pueden verlos. Una canción usada en algún repertorio no se puede eliminar.
 - **Registros de reuniones** con resumen, visibilidad y archivos PDF/JPG/PNG de
   hasta 5 MB.
 - **Ministerios (Pastor):** crear, editar, desactivar y reactivar. Un ministerio
