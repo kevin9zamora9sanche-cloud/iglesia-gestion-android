@@ -639,6 +639,7 @@ private fun ChurchApp() {
                             detailItemId = null
                             openFormRequest(FormRequest.EditAssignees(item.id))
                         },
+                        onOpenFile = ::openFile,
                         onChangeStatus = { status ->
                             perform("Estado actualizado", closeForm = false) {
                                 when {

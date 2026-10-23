@@ -485,6 +485,7 @@ fun ActivityDetailSheet(
     onEditRepertoire: () -> Unit,
     onEditAssignees: () -> Unit,
     onChangeStatus: (String) -> Unit,
+    onOpenFile: (RecordFile) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val ministry = ministries.find { it.id == item.ministryId }
@@ -616,7 +617,7 @@ fun ActivityDetailSheet(
                         TextButton(onClick = onEditRepertoire) { Text(if (worshipSet == null) "Crear" else "Editar") }
                     }
                 }
-                RepertoireList(worshipSet, songs, members)
+                RepertoireList(worshipSet, songs, members, onOpenFile)
             }
 
             if (item.kind == ItemKind.Activity && !item.isLegacyTask) {
@@ -671,7 +672,12 @@ fun ActivityDetailSheet(
 }
 
 @Composable
-fun RepertoireList(worshipSet: WorshipSet?, songs: List<WorshipSong>, members: List<Member>) {
+fun RepertoireList(
+    worshipSet: WorshipSet?,
+    songs: List<WorshipSong>,
+    members: List<Member>,
+    onOpenFile: (RecordFile) -> Unit = {},
+) {
     val uriHandler = LocalUriHandler.current
     if (worshipSet == null || worshipSet.songs.isEmpty()) {
         Text("Aún no hay canciones en el repertorio.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
@@ -693,6 +699,18 @@ fun RepertoireList(worshipSet: WorshipSet?, songs: List<WorshipSong>, members: L
                 Pill("Tono ${entry.key}", Brand, BrandSurface)
                 if (song?.referenceUrl?.startsWith("https://") == true) {
                     TextButton(onClick = { runCatching { uriHandler.openUri(song.referenceUrl) } }) { Text("Versión") }
+                }
+            }
+            // Partituras y letras para ensayar: visibles para todo el equipo.
+            song?.files?.forEach { file ->
+                Row(Modifier.padding(start = 28.dp)) {
+                    FileRow(
+                        name = file.name,
+                        contentType = file.contentType,
+                        size = file.sizeBytes,
+                        onOpen = { onOpenFile(file) },
+                        onRemove = null,
+                    )
                 }
             }
         }

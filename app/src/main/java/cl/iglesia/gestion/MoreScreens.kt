@@ -256,7 +256,7 @@ fun WorshipScreen(
                         }
                         item {
                             AppCard {
-                                RepertoireList(worshipSets.firstOrNull { it.activityId == current.id }, songs, members)
+                                RepertoireList(worshipSets.firstOrNull { it.activityId == current.id }, songs, members, onOpenFile)
                             }
                         }
                     }
