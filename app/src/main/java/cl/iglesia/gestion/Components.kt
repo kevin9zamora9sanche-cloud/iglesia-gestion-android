@@ -343,7 +343,7 @@ fun LabeledValue(label: String, value: String, modifier: Modifier = Modifier) {
 @Composable
 fun DetailRow(icon: ImageVector, text: String) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
-        Icon(icon, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = null, tint = TextMuted, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(8.dp))
         Text(text, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
     }
@@ -373,7 +373,7 @@ fun <T> ChoiceChips(
                 enabled = enabled(option),
                 label = { Text(label(option)) },
                 leadingIcon = if (isSelected) {
-                    { Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    { Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(22.dp)) }
                 } else {
                     null
                 },

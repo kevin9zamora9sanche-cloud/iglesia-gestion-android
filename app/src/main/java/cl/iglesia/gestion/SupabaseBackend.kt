@@ -99,7 +99,6 @@ object SupabaseBackend {
         val ministryRows = client.from("ministries")
             .select { order("name", Order.ASCENDING) }
             .decodeList<SupabaseMinistry>()
-            .filter(SupabaseMinistry::isActive)
         val membershipRows = client.from("ministry_memberships")
             .select()
             .decodeList<SupabaseMembership>()
@@ -141,7 +140,7 @@ object SupabaseBackend {
                 lastSignIn = accounts[profile.id]?.lastSignInAt?.let(::parseTimestamp),
             )
         }
-        val ministries = ministryRows.mapIndexed { index, ministry ->
+        val allMinistries = ministryRows.mapIndexed { index, ministry ->
             Ministry(
                 id = ministry.id,
                 name = ministry.name,
@@ -151,8 +150,10 @@ object SupabaseBackend {
                     .filter { it.ministryId == ministry.id && it.isLeader }
                     .map(SupabaseMembership::userId),
                 description = ministry.description,
+                active = ministry.isActive,
             )
         }
+        val (ministries, inactiveMinistries) = allMinistries.partition(Ministry::active)
 
         val activities = client.from("activities")
             .select()
@@ -322,6 +323,7 @@ object SupabaseBackend {
         return ChurchSnapshot(
             members = members,
             ministries = ministries,
+            inactiveMinistries = inactiveMinistries,
             activities = (churchActivities + churchTasks + meetings).sortedWith(
                 compareBy(ChurchActivity::date, ChurchActivity::time),
             ),
@@ -400,7 +402,7 @@ object SupabaseBackend {
             }
         }
         if (failed.isNotEmpty()) {
-            throw UserFacingException(
+            throw PartialSaveException(
                 "El registro se guardó, pero no se pudieron adjuntar: ${failed.joinToString { it.name }}. " +
                     "Puedes volver a adjuntarlos desde el registro.",
             )
@@ -680,6 +682,21 @@ object SupabaseBackend {
                 createdBy = currentMember.id,
             ),
         )
+    }
+
+    suspend fun updateMinistry(currentMember: Member, ministryId: String, draft: MinistryDraft) {
+        require(currentMember.isPastor) { "Solo el Pastor/Administrador puede editar ministerios." }
+        client.from("ministries").update(MinistryUpdate(draft.name.trim(), draft.description.trim())) {
+            filter { eq("id", ministryId) }
+        }
+    }
+
+    /** Desactiva o reactiva un ministerio; sus integrantes y registros se conservan. */
+    suspend fun setMinistryActive(currentMember: Member, ministryId: String, active: Boolean) {
+        require(currentMember.isPastor) { "Solo el Pastor/Administrador puede activar o desactivar ministerios." }
+        client.from("ministries").update(MinistryActiveUpdate(active)) {
+            filter { eq("id", ministryId) }
+        }
     }
 
     suspend fun addMembership(ministryId: String, userId: String, isLeader: Boolean) {
@@ -1222,6 +1239,17 @@ private data class WorshipSongInsert(
     @SerialName("default_key") val defaultKey: String,
     @SerialName("reference_url") val referenceUrl: String,
     @SerialName("created_by") val createdBy: String,
+)
+
+@Serializable
+private data class MinistryUpdate(
+    val name: String,
+    val description: String,
+)
+
+@Serializable
+private data class MinistryActiveUpdate(
+    @SerialName("is_active") val isActive: Boolean,
 )
 
 @Serializable

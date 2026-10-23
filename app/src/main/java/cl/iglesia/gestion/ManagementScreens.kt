@@ -68,8 +68,12 @@ fun MinistriesScreen(
     onAddMember: (Ministry) -> Unit,
     onSetLeader: (ministryId: String, userId: String, leader: Boolean) -> Unit,
     onRemoveMember: (ministryId: String, userId: String) -> Unit,
+    inactiveMinistries: List<Ministry> = emptyList(),
+    onEditMinistry: (Ministry) -> Unit = {},
+    onSetMinistryActive: (Ministry, Boolean) -> Unit = { _, _ -> },
 ) {
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var reactivating by remember { mutableStateOf<Ministry?>(null) }
     val selected = ministries.firstOrNull { it.id == selectedId }
     if (selected != null) {
         BackHandler { selectedId = null }
@@ -82,6 +86,11 @@ fun MinistriesScreen(
             onAddMember = onAddMember,
             onSetLeader = onSetLeader,
             onRemoveMember = onRemoveMember,
+            onEdit = { onEditMinistry(selected) },
+            onDeactivate = {
+                selectedId = null
+                onSetMinistryActive(selected, false)
+            },
         )
         return
     }
@@ -121,6 +130,36 @@ fun MinistriesScreen(
                     )
                 }
             }
+            if (member.isPastor && inactiveMinistries.isNotEmpty()) {
+                item {
+                    SectionHeader("Ministerios desactivados (${inactiveMinistries.size})")
+                    Text(
+                        "No aparecen para el resto de los usuarios. Sus integrantes y registros se conservan.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                    )
+                }
+                items(inactiveMinistries, key = { "inactive-${it.id}" }) { ministry ->
+                    AppCard {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SymbolBadge(ministry.icon, TextMuted, size = 48.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(ministry.name, style = MaterialTheme.typography.titleSmall, color = TextPrimary)
+                                Pill("Desactivado", TextSecondary, MutedSurface)
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        androidx.compose.material3.Button(
+                            onClick = { reactivating = ministry },
+                            enabled = !submitting,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                        ) { Text("Reactivar ministerio") }
+                    }
+                }
+            }
+            // Espacio para que el botón flotante no tape la última tarjeta.
+            item { Spacer(Modifier.height(88.dp)) }
         }
         if (member.isPastor) {
             ExtendedFloatingActionButton(
@@ -132,6 +171,19 @@ fun MinistriesScreen(
                 modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             )
         }
+    }
+
+    reactivating?.let { ministry ->
+        ConfirmDialog(
+            title = "¿Reactivar ${ministry.name}?",
+            message = "El ministerio volverá a aparecer para todos, con los integrantes que tenía.",
+            confirmLabel = "Reactivar",
+            onDismiss = { reactivating = null },
+            onConfirm = {
+                reactivating = null
+                onSetMinistryActive(ministry, true)
+            },
+        )
     }
 }
 
@@ -145,10 +197,13 @@ private fun MinistryDetail(
     onAddMember: (Ministry) -> Unit,
     onSetLeader: (String, String, Boolean) -> Unit,
     onRemoveMember: (String, String) -> Unit,
+    onEdit: () -> Unit,
+    onDeactivate: () -> Unit,
 ) {
     val ministryMembers = members.filter { ministry.id in it.ministryIds }
     val candidates = members.filter { it.active && ministry.id !in it.ministryIds }
     var removing by remember { mutableStateOf<Member?>(null) }
+    var confirmDeactivate by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -225,6 +280,41 @@ private fun MinistryDetail(
                 }
             }
         }
+        if (member.isPastor) {
+            item {
+                SectionHeader("Administrar ministerio")
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onEdit,
+                    enabled = !submitting,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                ) {
+                    Icon(Icons.Outlined.Edit, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Editar nombre y descripción")
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { confirmDeactivate = true },
+                    enabled = !submitting,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                ) { Text("Desactivar ministerio", color = Danger) }
+            }
+        }
+    }
+
+    if (confirmDeactivate) {
+        ConfirmDialog(
+            title = "¿Desactivar ${ministry.name}?",
+            message = "Dejará de aparecer para los usuarios. Sus integrantes y registros se conservan y podrás reactivarlo cuando quieras desde la lista de ministerios.",
+            confirmLabel = "Desactivar",
+            destructive = true,
+            onDismiss = { confirmDeactivate = false },
+            onConfirm = {
+                confirmDeactivate = false
+                onDeactivate()
+            },
+        )
     }
 
     removing?.let { person ->
@@ -449,7 +539,7 @@ private fun ProjectCard(
                             .fillMaxWidth()
                             .clip(MaterialTheme.shapes.small)
                             .clickable { onOpenActivity(activity) }
-                            .heightIn(min = 48.dp)
+                            .heightIn(min = 56.dp)
                             .padding(vertical = 6.dp),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -475,8 +565,8 @@ private fun ProjectCard(
                     }
                 }
                 if (canManage) {
-                    OutlinedButton(onClick = onEdit, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                        Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    OutlinedButton(onClick = onEdit, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
+                        Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("Editar proyecto")
                     }

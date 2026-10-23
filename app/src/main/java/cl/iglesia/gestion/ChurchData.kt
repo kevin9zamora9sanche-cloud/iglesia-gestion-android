@@ -60,6 +60,7 @@ data class Ministry(
     val color: Long,
     val leaderIds: List<String>,
     val description: String,
+    val active: Boolean = true,
 ) {
     val shortName: String get() = name.removePrefix("Ministerio de ").removePrefix("Ministerio ")
     val isWorship: Boolean get() = name.contains("alabanza", ignoreCase = true)
@@ -199,7 +200,10 @@ class PickedFile(
 )
 
 /** Error con un mensaje que puede mostrarse tal cual a la persona usuaria. */
-class UserFacingException(message: String) : Exception(message)
+open class UserFacingException(message: String) : Exception(message)
+
+/** Parte de la operación se guardó: el formulario se cierra y se recarga lo persistido. */
+class PartialSaveException(message: String) : UserFacingException(message)
 
 const val MAX_FILE_BYTES = 5L * 1024 * 1024
 val ALLOWED_FILE_TYPES = mapOf(
@@ -211,6 +215,8 @@ val ALLOWED_FILE_TYPES = mapOf(
 data class ChurchSnapshot(
     val members: List<Member>,
     val ministries: List<Ministry>,
+    /** Ministerios desactivados; solo el Pastor los recibe (RLS). */
+    val inactiveMinistries: List<Ministry> = emptyList(),
     val activities: List<ChurchActivity>,
     val projects: List<ChurchProject>,
     val songs: List<WorshipSong>,

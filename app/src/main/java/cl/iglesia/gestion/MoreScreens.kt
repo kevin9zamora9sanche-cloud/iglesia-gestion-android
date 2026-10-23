@@ -425,7 +425,7 @@ fun NotificationsScreen(
                 ScreenHeader("Notificaciones", "Avisos", modifier = Modifier.weight(1f))
                 if (unread.isNotEmpty()) {
                     TextButton(onClick = onMarkAllRead, enabled = !submitting) {
-                        Icon(Icons.Outlined.DoneAll, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Outlined.DoneAll, contentDescription = null, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Marcar todo")
                     }

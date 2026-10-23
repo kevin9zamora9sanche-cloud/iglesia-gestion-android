@@ -108,6 +108,7 @@ sealed interface FormRequest {
     data class Task(val activityId: String?) : FormRequest
     data object Song : FormRequest
     data object NewMinistry : FormRequest
+    data class EditMinistry(val ministry: Ministry) : FormRequest
     data class Profile(val member: Member) : FormRequest
     data class Repertoire(val cultoId: String) : FormRequest
     data object Record : FormRequest
@@ -167,6 +168,8 @@ private fun ChurchApp() {
     var detailItemId by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
     var formError by remember { mutableStateOf<String?>(null) }
+    /** Correo y contraseña temporal de la última cuenta creada, para entregarlos en persona. */
+    var createdAccount by remember { mutableStateOf<Pair<String, String>?>(null) }
     var confirmLogout by remember { mutableStateOf(false) }
 
     suspend fun reload(member: Member) {
@@ -302,7 +305,7 @@ private fun ChurchApp() {
                         android.util.Log.w("ChurchApp", "Operación rechazada", error)
                         val detail = (error as? UserFacingException)?.message
                             ?: "No se pudo guardar. Verifica los datos, tu conexión y tus permisos."
-                        if (error is UserFacingException && closeForm) {
+                        if (error is PartialSaveException && closeForm) {
                             // Guardado parcial: se cierra el formulario y se recarga para mostrar lo persistido.
                             openForm = null
                             reload(member)
@@ -368,12 +371,20 @@ private fun ChurchApp() {
                                 },
                                 icon = {
                                     if (tab == AppTab.More && unread > 0) {
-                                        BadgedBox(badge = { Badge() }) { Icon(tab.icon, contentDescription = null) }
+                                        BadgedBox(badge = { Badge() }) { Icon(tab.icon, contentDescription = null, modifier = Modifier.size(28.dp)) }
                                     } else {
-                                        Icon(tab.icon, contentDescription = null)
+                                        Icon(tab.icon, contentDescription = null, modifier = Modifier.size(28.dp))
                                     }
                                 },
-                                label = { Text(tab.label, maxLines = 1) },
+                                // Cinco pestañas: la etiqueta usa un tamaño fijo que cabe completa en pantallas angostas.
+                                label = {
+                                    Text(
+                                        tab.label,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+                                    )
+                                },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = Brand,
                                     selectedTextColor = Brand,
@@ -446,6 +457,16 @@ private fun ChurchApp() {
                                     onRemoveMember = { ministryId, userId ->
                                         perform("Integrante retirado", closeForm = false) {
                                             SupabaseBackend.removeMembership(ministryId, userId)
+                                        }
+                                    },
+                                    inactiveMinistries = snapshot?.inactiveMinistries.orEmpty(),
+                                    onEditMinistry = { openFormRequest(FormRequest.EditMinistry(it)) },
+                                    onSetMinistryActive = { ministry, active ->
+                                        perform(
+                                            if (active) "${ministry.name} se reactivó" else "${ministry.name} se desactivó",
+                                            closeForm = false,
+                                        ) {
+                                            SupabaseBackend.setMinistryActive(member, ministry.id, active)
                                         }
                                     },
                                 )
@@ -653,6 +674,15 @@ private fun ChurchApp() {
                         perform("Ministerio creado") { SupabaseBackend.createMinistry(member, draft) }
                     },
                 )
+                is FormRequest.EditMinistry -> MinistryForm(
+                    existing = request.ministry,
+                    submitting = submitting,
+                    error = formError,
+                    onDismiss = { openForm = null },
+                    onSubmit = { draft ->
+                        perform("Ministerio actualizado") { SupabaseBackend.updateMinistry(member, request.ministry.id, draft) }
+                    },
+                )
                 is FormRequest.Profile -> ProfileForm(
                     target = request.member,
                     ministries = ministries,
@@ -690,7 +720,10 @@ private fun ChurchApp() {
                     error = formError,
                     onDismiss = { openForm = null },
                     onSubmit = { draft ->
-                        perform("Cuenta creada para ${draft.email.trim()}") { SupabaseBackend.createUserAccount(draft) }
+                        perform("Cuenta creada para ${draft.email.trim()}") {
+                            SupabaseBackend.createUserAccount(draft)
+                            createdAccount = draft.email.trim() to draft.password
+                        }
                     },
                 )
                 FormRequest.ChangePassword -> ChangePasswordForm(
@@ -786,6 +819,10 @@ private fun ChurchApp() {
                         )
                     }
                 }
+            }
+
+            createdAccount?.let { (email, password) ->
+                CreatedAccountDialog(email, password) { createdAccount = null }
             }
 
             if (confirmLogout) {

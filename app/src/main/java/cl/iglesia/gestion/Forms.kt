@@ -527,12 +527,13 @@ fun MinistryForm(
     error: String?,
     onDismiss: () -> Unit,
     onSubmit: (MinistryDraft) -> Unit,
+    existing: Ministry? = null,
 ) {
-    var name by rememberSaveable { mutableStateOf("") }
-    var description by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf(existing?.name.orEmpty()) }
+    var description by rememberSaveable { mutableStateOf(existing?.description.orEmpty()) }
     FullScreenForm(
-        title = "Nuevo ministerio",
-        confirmLabel = "Crear ministerio",
+        title = if (existing == null) "Nuevo ministerio" else "Editar ministerio",
+        confirmLabel = if (existing == null) "Crear ministerio" else "Guardar cambios",
         canConfirm = name.isNotBlank(),
         submitting = submitting,
         error = error,
@@ -672,6 +673,50 @@ fun NewUserForm(
     }
 }
 
+/** Datos de acceso de la cuenta recién creada; se muestran hasta que el Pastor los cierra. */
+@Composable
+fun CreatedAccountDialog(email: String, password: String, onDismiss: () -> Unit) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = {},
+        title = { Text("Cuenta creada") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Anota estos datos y entrégalos en persona. La contraseña no se volverá a mostrar.",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text("Correo", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                Text(email, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Text("Contraseña temporal", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(
+                        password,
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            letterSpacing = androidx.compose.ui.unit.TextUnit(2f, androidx.compose.ui.unit.TextUnitType.Sp),
+                        ),
+                        color = Brand,
+                    )
+                }
+                OutlinedButton(
+                    onClick = {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString("Correo: $email\nContraseña: $password"))
+                        copied = true
+                    },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                ) { Text(if (copied) "Copiado" else "Copiar correo y contraseña") }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.Button(onClick = onDismiss, modifier = Modifier.heightIn(min = 56.dp)) {
+                Text("Listo, ya los anoté")
+            }
+        },
+    )
+}
+
 @Composable
 fun ProfileForm(
     target: Member,
@@ -734,12 +779,12 @@ fun ProfileForm(
         OutlinedButton(
             onClick = { confirmReset = true },
             enabled = target.email.isNotBlank() && !submitting,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
         ) { Text("Enviar correo para restablecer contraseña") }
         OutlinedButton(
             onClick = { settingPassword = true },
             enabled = !submitting,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
         ) { Text("Asignar contraseña temporal") }
     }
     if (confirmDeactivate) {
@@ -977,7 +1022,7 @@ fun RepertoireForm(
                     )
                     var leadMenu by remember { mutableStateOf(false) }
                     Box(Modifier.weight(1f)) {
-                        OutlinedButton(onClick = { leadMenu = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        OutlinedButton(onClick = { leadMenu = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
                             Text(
                                 members.find { it.id == entry.leadId }?.name?.let { "Dirige: $it" } ?: "Quién dirige (opcional)",
                                 maxLines = 1,
@@ -1000,7 +1045,7 @@ fun RepertoireForm(
                 }
             }
         }
-        OutlinedButton(onClick = { picking = true }, enabled = songs.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+        OutlinedButton(onClick = { picking = true }, enabled = songs.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             Icon(Icons.Outlined.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text(if (songs.isEmpty()) "El catálogo está vacío" else "Agregar canción del catálogo")

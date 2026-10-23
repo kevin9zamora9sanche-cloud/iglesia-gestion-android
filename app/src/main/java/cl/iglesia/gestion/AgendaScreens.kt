@@ -644,11 +644,11 @@ fun ActivityDetailSheet(
                                 .fillMaxWidth()
                                 .clip(MaterialTheme.shapes.small)
                                 .clickable { onOpenItem(task) }
-                                .heightIn(min = 48.dp)
+                                .heightIn(min = 56.dp)
                                 .padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Outlined.Person, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Outlined.Person, contentDescription = null, tint = TextMuted, modifier = Modifier.size(22.dp))
                             Spacer(Modifier.width(8.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(task.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -680,7 +680,7 @@ fun RepertoireList(worshipSet: WorshipSet?, songs: List<WorshipSong>, members: L
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         worshipSet.songs.forEach { entry ->
             val song = songs.find { it.id == entry.songId }
-            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 52.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${entry.position}.", style = MaterialTheme.typography.labelLarge, color = BrandLight, modifier = Modifier.width(28.dp))
                 Column(Modifier.weight(1f)) {
                     Text(song?.title ?: "Canción", style = MaterialTheme.typography.bodyMedium)

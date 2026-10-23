@@ -104,7 +104,7 @@ fun Long.fileSizeLabel(): String = when {
 @Composable
 private fun FileRow(name: String, contentType: String, size: Long, onOpen: (() -> Unit)?, onRemove: (() -> Unit)?) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        Modifier.fillMaxWidth().heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -205,7 +205,7 @@ fun RecordsScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.AttachFile, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Outlined.AttachFile, contentDescription = null, tint = TextMuted, modifier = Modifier.size(22.dp))
                         Spacer(Modifier.width(4.dp))
                         Text(
                             when (record.files.size) {
@@ -226,7 +226,7 @@ fun RecordsScreen(
                         if (record.visibility == RecordVisibility.Selected && member.isPastor) {
                             val names = record.viewerIds.mapNotNull { id -> members.find { it.id == id }?.name }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.Lock, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Outlined.Lock, contentDescription = null, tint = TextMuted, modifier = Modifier.size(22.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     "Visible para: " + names.joinToString().ifBlank { "solo el Pastor" },
@@ -253,16 +253,16 @@ fun RecordsScreen(
                                         pickFiles()
                                     },
                                     enabled = !submitting,
-                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                                    modifier = Modifier.weight(1f).heightIn(min = 56.dp),
                                 ) {
-                                    Icon(Icons.Outlined.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Outlined.AttachFile, contentDescription = null, modifier = Modifier.size(22.dp))
                                     Spacer(Modifier.width(6.dp))
                                     Text("Adjuntar")
                                 }
                                 OutlinedButton(
                                     onClick = { deletingRecord = record },
                                     enabled = !submitting,
-                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                                    modifier = Modifier.weight(1f).heightIn(min = 56.dp),
                                 ) {
                                     Text("Eliminar", color = Danger)
                                 }
@@ -438,7 +438,7 @@ fun RecordForm(
                 onRemove = { files = files.filterIndexed { i, _ -> i != index } },
             )
         }
-        OutlinedButton(onClick = pickFiles, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+        OutlinedButton(onClick = pickFiles, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             Icon(Icons.Outlined.AttachFile, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text("Agregar archivos")
