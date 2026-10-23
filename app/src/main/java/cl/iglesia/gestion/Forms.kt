@@ -1000,9 +1000,9 @@ fun ReassignTaskForm(
 
 // Repertorio --------------------------------------------------------------------------------
 
+/** Edita el repertorio único y reutilizable del ministerio de Alabanza. */
 @Composable
 fun RepertoireForm(
-    culto: ChurchActivity,
     songs: List<WorshipSong>,
     members: List<Member>,
     existing: WorshipSet?,
@@ -1016,20 +1016,17 @@ fun RepertoireForm(
     val activeMembers = members.filter(Member::active)
 
     FullScreenForm(
-        title = "Repertorio",
+        title = "Repertorio de Alabanza",
         confirmLabel = "Guardar y notificar",
-        canConfirm = culto.worshipLeaderId != null,
+        canConfirm = true,
         submitting = submitting,
         error = error,
         onDismiss = onDismiss,
         onConfirm = { onSubmit(entries.mapIndexed { index, entry -> entry.copy(position = index + 1) }) },
     ) {
-        Text("${culto.title} · ${culto.date.longLabel()}", style = MaterialTheme.typography.titleSmall)
-        if (culto.worshipLeaderId == null) {
-            MessageBanner("Este Culto no tiene director de alabanza; asígnalo antes de preparar el repertorio.", BannerTone.Error)
-        }
         MessageBanner(
-            "Al guardar se enviará un único aviso al ministerio de Alabanza, al Pastor, al predicador y al director.",
+            "Es el repertorio vigente del ministerio y se usa en todos los cultos y ensayos. " +
+                "Al guardar se enviará un único aviso a Alabanza, al Pastor y a predicadores y directores de los próximos cultos.",
             BannerTone.Info,
         )
         if (entries.isEmpty()) {

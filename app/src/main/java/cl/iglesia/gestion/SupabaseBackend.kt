@@ -707,15 +707,13 @@ object SupabaseBackend {
 
     /**
      * Elimina una canción y sus archivos. Una canción usada en algún repertorio no se
-     * puede eliminar (la base lo impide para conservar el historial de los cultos).
+     * puede eliminar (la base lo impide con una clave foránea).
      */
     suspend fun deleteWorshipSong(song: WorshipSong, worshipSets: List<WorshipSet>) {
-        val uses = worshipSets.count { set -> set.songs.any { it.songId == song.id } }
-        if (uses > 0) {
+        if (worshipSets.any { set -> set.songs.any { it.songId == song.id } }) {
             throw UserFacingException(
-                "\"${song.title}\" está en el repertorio de " +
-                    (if (uses == 1) "1 culto" else "$uses cultos") +
-                    ", por lo que no se puede eliminar. Puedes editar sus datos.",
+                "\"${song.title}\" está en el repertorio, por lo que no se puede eliminar. " +
+                    "Quítala del repertorio primero o edita sus datos.",
             )
         }
         // Los objetos de Storage se borran antes: su permiso depende de que la canción exista.
@@ -763,12 +761,14 @@ object SupabaseBackend {
         client.storage.from(SONGS_BUCKET).delete(file.objectPath)
     }
 
-    /** Reemplaza el repertorio completo de un Culto en una sola transacción. */
-    suspend fun saveWorshipSet(activityId: String, ministryId: String, songs: List<WorshipSetSong>) {
+    /**
+     * Reemplaza el repertorio único del ministerio en una sola transacción; la base
+     * envía un solo aviso. Requiere la migración 20261023140000.
+     */
+    suspend fun saveMinistryRepertoire(ministryId: String, songs: List<WorshipSetSong>) {
         client.postgrest.rpc(
-            function = "save_worship_set",
+            function = "save_ministry_repertoire",
             parameters = buildJsonObject {
-                put("target_activity_id", activityId)
                 put("target_ministry_id", ministryId)
                 putJsonArray("target_songs") {
                     songs.forEach { song ->
@@ -1215,8 +1215,8 @@ private data class SupabaseSong(
 @Serializable
 private data class SupabaseWorshipSet(
     val id: String,
-    @SerialName("activity_id") val activityId: String,
-    @SerialName("director_id") val directorId: String,
+    @SerialName("activity_id") val activityId: String? = null,
+    @SerialName("director_id") val directorId: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
 )
 

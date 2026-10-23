@@ -111,7 +111,7 @@ sealed interface FormRequest {
     data object NewMinistry : FormRequest
     data class EditMinistry(val ministry: Ministry) : FormRequest
     data class Profile(val member: Member) : FormRequest
-    data class Repertoire(val cultoId: String) : FormRequest
+    data object Repertoire : FormRequest
     data object Record : FormRequest
     data object NewUser : FormRequest
     data object ChangePassword : FormRequest
@@ -531,7 +531,7 @@ private fun ChurchApp() {
                                         canManage = permissions.canManageWorship,
                                         onBack = { morePage = MorePage.Menu },
                                         onCreateSong = { openFormRequest(FormRequest.Song) },
-                                        onEditRepertoire = { openFormRequest(FormRequest.Repertoire(it.id)) },
+                                        onEditRepertoire = { openFormRequest(FormRequest.Repertoire) },
                                         submitting = submitting,
                                         onOpenFile = ::openFile,
                                         onAddSongFiles = { song, files ->
@@ -633,7 +633,7 @@ private fun ChurchApp() {
                         },
                         onEditRepertoire = {
                             detailItemId = null
-                            openFormRequest(FormRequest.Repertoire(item.id))
+                            openFormRequest(FormRequest.Repertoire)
                         },
                         onEditAssignees = {
                             detailItemId = null
@@ -875,23 +875,21 @@ private fun ChurchApp() {
                         perform("Registro guardado") { SupabaseBackend.createMeetingRecord(member, draft, files) }
                     },
                 )
-                is FormRequest.Repertoire -> {
-                    val culto = activities.firstOrNull { it.id == request.cultoId }
+                FormRequest.Repertoire -> {
                     val ministryId = permissions.worshipMinistryId
-                    if (culto == null || ministryId == null) {
+                    if (ministryId == null) {
                         LaunchedEffect(request) { openForm = null }
                     } else {
                         RepertoireForm(
-                            culto = culto,
                             songs = snapshot?.songs.orEmpty(),
                             members = members,
-                            existing = snapshot?.worshipSets.orEmpty().firstOrNull { it.activityId == culto.id },
+                            existing = snapshot?.worshipSets.orEmpty().ministryRepertoire(),
                             submitting = submitting,
                             error = formError,
                             onDismiss = { openForm = null },
                             onSubmit = { setSongs ->
                                 perform("Repertorio guardado y notificado") {
-                                    SupabaseBackend.saveWorshipSet(culto.id, ministryId, setSongs)
+                                    SupabaseBackend.saveMinistryRepertoire(ministryId, setSongs)
                                 }
                             },
                         )

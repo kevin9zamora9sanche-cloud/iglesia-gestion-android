@@ -148,13 +148,20 @@ data class WorshipSetSong(
     val leadId: String?,
 )
 
+/**
+ * Repertorio de Alabanza. El vigente es único y reutilizable (`activityId` nulo);
+ * los atados a un Culto son repertorios antiguos que se conservan.
+ */
 data class WorshipSet(
     val id: String,
-    val activityId: String,
-    val directorId: String,
+    val activityId: String?,
+    val directorId: String?,
     val updatedAt: OffsetDateTime?,
     val songs: List<WorshipSetSong>,
 )
+
+/** Repertorio único y reutilizable del ministerio, si ya se creó. */
+fun List<WorshipSet>.ministryRepertoire(): WorshipSet? = firstOrNull { it.activityId == null }
 
 /** Visibilidad de un registro de reunión. */
 enum class RecordVisibility(val databaseValue: String, val label: String) {

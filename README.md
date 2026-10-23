@@ -282,7 +282,9 @@ Reglas del proyecto:
   comentarios. Los responsables se pueden cambiar después.
 - **Proyectos** institucionales con responsable, fechas, presupuesto y **barra
   de avance** calculada automáticamente a partir de sus actividades y tareas.
-- **Alabanza:** repertorio de cada culto (orden, tono, quién dirige) y catálogo
+- **Alabanza:** repertorio único y reutilizable del ministerio (canciones en
+  orden, tono por canción, versión, archivos y quién dirige, opcional), visible
+  en Alabanza y en la ficha de cada Culto y Ensayo; y catálogo
   de canciones con título, artista, tonalidad, enlace a la versión de referencia
   y archivos (partitura, letra o acordes en PDF/JPG/PNG de hasta 5 MB). El Pastor
   y los líderes de Alabanza registran, editan y eliminan canciones y archivos;

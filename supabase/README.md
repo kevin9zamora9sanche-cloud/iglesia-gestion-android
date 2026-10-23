@@ -58,6 +58,7 @@ Las migraciones se aplican por timestamp y en este orden:
 12. `migrations/20261023100000_admin_user_directory.sql`
 13. `migrations/20261023120000_revoke_trigger_function_rpc.sql`
 14. `migrations/20261023130000_worship_song_files.sql`
+15. `migrations/20261023140000_reusable_ministry_repertoire.sql`
 
 La migración 12 agrega `admin_list_users()`, que muestra al Pastor el correo y
 el último acceso de cada cuenta. La migración 13 retira el permiso de ejecutar
@@ -66,7 +67,11 @@ los triggers siguen funcionando igual. La migración 14 agrega
 `worship_song_files` y el bucket privado `worship-songs` (rutas
 `<song_id>/<archivo>`): todo usuario activo puede ver y descargar los archivos de
 las canciones; solo el Pastor y los líderes de Alabanza pueden subirlos o
-eliminarlos.
+eliminarlos. La migración 15 cambia a un repertorio único y reutilizable por
+ministerio (`worship_sets` con `activity_id` nulo) que se guarda con
+`save_ministry_repertoire()`; cada guardado envía un solo aviso a Alabanza, al
+Pastor y a predicadores y directores de los próximos cultos. Los repertorios por
+Culto anteriores se conservan, pero la app ya no los crea.
 
 ### Función `admin-users` (administración de cuentas)
 

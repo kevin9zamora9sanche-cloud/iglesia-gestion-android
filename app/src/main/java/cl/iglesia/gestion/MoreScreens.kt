@@ -156,7 +156,7 @@ fun WorshipScreen(
     canManage: Boolean,
     onBack: () -> Unit,
     onCreateSong: () -> Unit,
-    onEditRepertoire: (ChurchActivity) -> Unit,
+    onEditRepertoire: () -> Unit,
     submitting: Boolean = false,
     onOpenFile: (RecordFile) -> Unit = {},
     onAddSongFiles: (WorshipSong, List<PickedFile>) -> Unit = { _, _ -> },
@@ -180,6 +180,7 @@ fun WorshipScreen(
     }
     var selectedCultoId by rememberSaveable { mutableStateOf<String?>(null) }
     val culto = cultos.firstOrNull { it.id == selectedCultoId } ?: cultos.firstOrNull()
+    val repertoire = worshipSets.ministryRepertoire()
     val uriHandler = LocalUriHandler.current
     val filteredSongs = songs.filter {
         it.title.contains(query.trim(), ignoreCase = true) || it.artist.contains(query.trim(), ignoreCase = true)
@@ -206,9 +207,21 @@ fun WorshipScreen(
                 }
             }
             if (!showCatalog) {
-                if (cultos.isEmpty()) {
-                    item { EmptyState("Sin cultos programados", "Cuando se programe un Culto podrás preparar su repertorio.", Icons.Outlined.Event) }
-                } else {
+                // Repertorio único y reutilizable: no depende de que haya cultos programados.
+                item {
+                    SectionHeader(
+                        "Repertorio vigente",
+                        actionLabel = if (canManage) (if (repertoire == null) "Crear" else "Editar") else null,
+                        onAction = onEditRepertoire,
+                    )
+                }
+                item {
+                    AppCard {
+                        RepertoireList(repertoire, songs, members, onOpenFile)
+                    }
+                }
+                if (cultos.isNotEmpty()) {
+                    item { SectionHeader("Próximos cultos") }
                     if (cultos.size > 1) {
                         item {
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -245,18 +258,6 @@ fun WorshipScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color.White.copy(alpha = 0.85f),
                                 )
-                            }
-                        }
-                        item {
-                            SectionHeader(
-                                "Canciones del repertorio",
-                                actionLabel = if (canManage) "Editar" else null,
-                                onAction = { onEditRepertoire(current) },
-                            )
-                        }
-                        item {
-                            AppCard {
-                                RepertoireList(worshipSets.firstOrNull { it.activityId == current.id }, songs, members, onOpenFile)
                             }
                         }
                     }
