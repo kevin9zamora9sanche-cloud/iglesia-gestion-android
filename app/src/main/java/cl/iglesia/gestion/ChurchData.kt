@@ -137,6 +137,8 @@ data class WorshipSong(
     val artist: String,
     val defaultKey: String,
     val referenceUrl: String,
+    /** Partituras, letras o acordes (PDF, JPG o PNG). */
+    val files: List<RecordFile> = emptyList(),
 )
 
 data class WorshipSetSong(
@@ -167,6 +169,8 @@ data class RecordFile(
     val contentType: String,
     val sizeBytes: Long,
     val objectPath: String,
+    /** Bucket de Storage donde vive el archivo: registros o canciones. */
+    val bucket: String = "meeting-records",
 )
 
 /** Registro posterior a una reunión; distinto de la convocatoria del calendario. */

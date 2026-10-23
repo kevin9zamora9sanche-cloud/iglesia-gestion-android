@@ -102,7 +102,7 @@ fun Long.fileSizeLabel(): String = when {
 }
 
 @Composable
-private fun FileRow(name: String, contentType: String, size: Long, onOpen: (() -> Unit)?, onRemove: (() -> Unit)?) {
+fun FileRow(name: String, contentType: String, size: Long, onOpen: (() -> Unit)?, onRemove: (() -> Unit)?) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,

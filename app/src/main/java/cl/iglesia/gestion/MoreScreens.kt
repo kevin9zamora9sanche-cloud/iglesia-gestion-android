@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Description
@@ -156,8 +157,19 @@ fun WorshipScreen(
     onBack: () -> Unit,
     onCreateSong: () -> Unit,
     onEditRepertoire: (ChurchActivity) -> Unit,
+    submitting: Boolean = false,
+    onOpenFile: (RecordFile) -> Unit = {},
+    onAddSongFiles: (WorshipSong, List<PickedFile>) -> Unit = { _, _ -> },
+    onDeleteSongFile: (RecordFile) -> Unit = {},
+    onError: (String) -> Unit = {},
 ) {
     val today = LocalDate.now()
+    var attachTo by androidx.compose.runtime.remember { mutableStateOf<WorshipSong?>(null) }
+    var deletingFile by androidx.compose.runtime.remember { mutableStateOf<RecordFile?>(null) }
+    val pickFiles = rememberFilePicker(
+        onPicked = { files -> attachTo?.let { onAddSongFiles(it, files) } },
+        onError = onError,
+    )
     var showCatalog by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     val cultos = activities.filter {
@@ -271,9 +283,34 @@ fun WorshipScreen(
                         if (song.referenceUrl.startsWith("https://")) {
                             TextButton(onClick = { runCatching { uriHandler.openUri(song.referenceUrl) } }) { Text("Escuchar versión de referencia") }
                         }
+                        song.files.forEach { file ->
+                            FileRow(
+                                name = file.name,
+                                contentType = file.contentType,
+                                size = file.sizeBytes,
+                                onOpen = { onOpenFile(file) },
+                                onRemove = if (canManage && !submitting) ({ deletingFile = file }) else null,
+                            )
+                        }
+                        if (canManage) {
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = {
+                                    attachTo = song
+                                    pickFiles()
+                                },
+                                enabled = !submitting,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                            ) {
+                                Icon(Icons.Outlined.AttachFile, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Adjuntar partitura o letra")
+                            }
+                        }
                     }
                 }
             }
+            // Espacio para que el botón flotante no tape la última tarjeta.
+            item { Spacer(Modifier.height(88.dp)) }
         }
         if (canManage && showCatalog) {
             ExtendedFloatingActionButton(
@@ -285,6 +322,20 @@ fun WorshipScreen(
                 modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             )
         }
+    }
+
+    deletingFile?.let { file ->
+        ConfirmDialog(
+            title = "¿Eliminar el archivo?",
+            message = "\"${file.name}\" dejará de estar disponible para todos.",
+            confirmLabel = "Eliminar",
+            destructive = true,
+            onDismiss = { deletingFile = null },
+            onConfirm = {
+                deletingFile = null
+                onDeleteSongFile(file)
+            },
+        )
     }
 }
 

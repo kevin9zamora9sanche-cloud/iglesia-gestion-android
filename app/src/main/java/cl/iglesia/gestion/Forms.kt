@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -488,13 +489,22 @@ fun SongForm(
     submitting: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onSubmit: (WorshipSongDraft) -> Unit,
+    onSubmit: (WorshipSongDraft, List<PickedFile>) -> Unit,
 ) {
     var title by rememberSaveable { mutableStateOf("") }
     var artist by rememberSaveable { mutableStateOf("") }
     var key by rememberSaveable { mutableStateOf("C") }
     var minor by rememberSaveable { mutableStateOf(false) }
     var link by rememberSaveable { mutableStateOf("") }
+    var files by remember { mutableStateOf(listOf<PickedFile>()) }
+    var pickError by remember { mutableStateOf<String?>(null) }
+    val pickFiles = rememberFilePicker(
+        onPicked = { picked ->
+            pickError = null
+            files = files + picked
+        },
+        onError = { pickError = it },
+    )
     val linkValid = link.isBlank() || link.trim().startsWith("https://")
     FullScreenForm(
         title = "Agregar canción",
@@ -503,7 +513,7 @@ fun SongForm(
         submitting = submitting,
         error = error,
         onDismiss = onDismiss,
-        onConfirm = { onSubmit(WorshipSongDraft(title, artist, if (minor) key + "m" else key, link)) },
+        onConfirm = { onSubmit(WorshipSongDraft(title, artist, if (minor) key + "m" else key, link), files) },
     ) {
         TextInput(title, { title = it }, "Título", required = true)
         TextInput(artist, { artist = it }, "Artista o autor")
@@ -518,6 +528,27 @@ fun SongForm(
             isError = !linkValid,
             supportingText = if (linkValid) "Opcional. Por ejemplo, un enlace de YouTube." else "El enlace debe comenzar con https://",
         )
+        FieldLabel("Archivos de la canción")
+        Text(
+            "Partitura, letra o acordes. PDF, JPG o PNG, hasta 5 MB cada uno.",
+            style = MaterialTheme.typography.bodySmall,
+            color = TextMuted,
+        )
+        pickError?.let { FieldError(it) }
+        files.forEachIndexed { index, file ->
+            FileRow(
+                name = file.name,
+                contentType = file.contentType,
+                size = file.bytes.size.toLong(),
+                onOpen = null,
+                onRemove = { files = files.filterIndexed { i, _ -> i != index } },
+            )
+        }
+        OutlinedButton(onClick = pickFiles, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
+            Icon(Icons.Outlined.AttachFile, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Agregar archivos")
+        }
     }
 }
 

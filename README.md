@@ -283,7 +283,9 @@ Reglas del proyecto:
 - **Proyectos** institucionales con responsable, fechas, presupuesto y **barra
   de avance** calculada automáticamente a partir de sus actividades y tareas.
 - **Alabanza:** repertorio de cada culto (orden, tono, quién dirige) y catálogo
-  de canciones con enlace a la versión de referencia.
+  de canciones con título, artista, tonalidad, enlace a la versión de referencia
+  y archivos (partitura, letra o acordes en PDF/JPG/PNG de hasta 5 MB). El Pastor
+  y los líderes de Alabanza registran canciones y archivos; todos pueden verlos.
 - **Registros de reuniones** con resumen, visibilidad y archivos PDF/JPG/PNG de
   hasta 5 MB.
 - **Ministerios (Pastor):** crear, editar, desactivar y reactivar. Un ministerio

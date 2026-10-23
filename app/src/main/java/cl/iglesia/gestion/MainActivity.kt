@@ -504,6 +504,17 @@ private fun ChurchApp() {
                                         onBack = { morePage = MorePage.Menu },
                                         onCreateSong = { openFormRequest(FormRequest.Song) },
                                         onEditRepertoire = { openFormRequest(FormRequest.Repertoire(it.id)) },
+                                        submitting = submitting,
+                                        onOpenFile = ::openFile,
+                                        onAddSongFiles = { song, files ->
+                                            perform(if (files.size == 1) "Archivo adjuntado" else "${files.size} archivos adjuntados", closeForm = false) {
+                                                files.forEach { SupabaseBackend.uploadSongFile(member, song.id, it) }
+                                            }
+                                        },
+                                        onDeleteSongFile = { file ->
+                                            perform("Archivo eliminado", closeForm = false) { SupabaseBackend.deleteSongFile(file) }
+                                        },
+                                        onError = { message -> coroutineScope.launch { snackbar.showSnackbar(message) } },
                                     )
                                     MorePage.Records -> RecordsScreen(
                                         member = member,
@@ -664,9 +675,9 @@ private fun ChurchApp() {
                     submitting = submitting,
                     error = formError,
                     onDismiss = { openForm = null },
-                    onSubmit = { draft ->
+                    onSubmit = { draft, files ->
                         permissions.worshipMinistryId?.let { ministryId ->
-                            perform("Canción agregada") { SupabaseBackend.createWorshipSong(member, ministryId, draft) }
+                            perform("Canción agregada") { SupabaseBackend.createWorshipSong(member, ministryId, draft, files) }
                         }
                     },
                 )

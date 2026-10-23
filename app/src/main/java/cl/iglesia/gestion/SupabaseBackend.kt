@@ -54,6 +54,7 @@ object SupabaseBackend {
     }
 
     private const val RECORDS_BUCKET = "meeting-records"
+    private const val SONGS_BUCKET = "worship-songs"
 
     suspend fun loadCurrentMember(): Member {
         val user = client.auth.retrieveUserForCurrentSession()
@@ -251,6 +252,19 @@ object SupabaseBackend {
             }
 
         val worshipMinistryId = ministries.firstOrNull(Ministry::isWorship)?.id
+        // Archivos de canciones: requieren la migración 20261023130000; sin ella el
+        // catálogo funciona igual, solo sin archivos.
+        val songFiles = try {
+            client.from("worship_song_files")
+                .select { order("created_at", Order.ASCENDING) }
+                .decodeList<SupabaseSongFile>()
+                .groupBy(SupabaseSongFile::songId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "Archivos de canciones no disponibles", error)
+            emptyMap()
+        }
         val songs = worshipMinistryId?.let { ministryId ->
             client.from("worship_songs")
                 .select {
@@ -267,6 +281,9 @@ object SupabaseBackend {
                         artist = it.artist,
                         defaultKey = it.defaultKey,
                         referenceUrl = it.referenceUrl,
+                        files = songFiles[it.id].orEmpty().map { file ->
+                            RecordFile(file.id, file.fileName, file.contentType, file.sizeBytes, file.objectPath, SONGS_BUCKET)
+                        },
                     )
                 }
         }.orEmpty()
@@ -454,9 +471,9 @@ object SupabaseBackend {
         }
     }
 
-    /** Enlace temporal de descarga; Storage valida los permisos del registro. */
+    /** Enlace temporal de descarga; Storage valida los permisos del registro o la canción. */
     suspend fun signedFileUrl(file: RecordFile): String {
-        val url = client.storage.from(RECORDS_BUCKET).createSignedUrl(file.objectPath, 5.minutes)
+        val url = client.storage.from(file.bucket).createSignedUrl(file.objectPath, 5.minutes)
         return if (url.startsWith("http")) url else BuildConfig.SUPABASE_URL.trimEnd('/') + "/storage/v1/" + url.trimStart('/')
     }
 
@@ -638,10 +655,16 @@ object SupabaseBackend {
         }
     }
 
-    suspend fun createWorshipSong(currentMember: Member, ministryId: String, draft: WorshipSongDraft) {
+    suspend fun createWorshipSong(
+        currentMember: Member,
+        ministryId: String,
+        draft: WorshipSongDraft,
+        files: List<PickedFile> = emptyList(),
+    ) {
+        val songId = UUID.randomUUID().toString()
         client.from("worship_songs").insert(
             WorshipSongInsert(
-                id = UUID.randomUUID().toString(),
+                id = songId,
                 ministryId = ministryId,
                 title = draft.title.trim(),
                 artist = draft.artist.trim(),
@@ -650,6 +673,59 @@ object SupabaseBackend {
                 createdBy = currentMember.id,
             ),
         )
+        val failed = files.filter { file ->
+            try {
+                uploadSongFile(currentMember, songId, file)
+                false
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                android.util.Log.w("SupabaseBackend", "No se pudo adjuntar ${file.name}", error)
+                true
+            }
+        }
+        if (failed.isNotEmpty()) {
+            throw PartialSaveException(
+                "La canción se guardó, pero no se pudieron adjuntar: ${failed.joinToString { it.name }}. " +
+                    "Puedes volver a adjuntarlos desde el catálogo.",
+            )
+        }
+    }
+
+    suspend fun uploadSongFile(currentMember: Member, songId: String, file: PickedFile) {
+        val extension = ALLOWED_FILE_TYPES[file.contentType]
+            ?: throw UserFacingException("Solo se permiten archivos PDF, JPG o PNG.")
+        if (file.bytes.isEmpty() || file.bytes.size > MAX_FILE_BYTES) {
+            throw UserFacingException("Cada archivo debe pesar como máximo 5 MB.")
+        }
+        val fileId = UUID.randomUUID().toString()
+        val path = "$songId/$fileId.$extension"
+        val bucket = client.storage.from(SONGS_BUCKET)
+        bucket.upload(path, file.bytes, upsert = false)
+        try {
+            client.from("worship_song_files").insert(
+                SongFileInsert(
+                    id = fileId,
+                    songId = songId,
+                    fileName = file.name,
+                    contentType = file.contentType,
+                    sizeBytes = file.bytes.size.toLong(),
+                    objectPath = path,
+                    uploadedBy = currentMember.id,
+                ),
+            )
+        } catch (error: Exception) {
+            // Sin fila asociada el objeto quedaría huérfano: se elimina.
+            runCatching { bucket.delete(path) }
+            throw error
+        }
+    }
+
+    suspend fun deleteSongFile(file: RecordFile) {
+        client.from("worship_song_files").delete {
+            filter { eq("id", file.id) }
+        }
+        client.storage.from(SONGS_BUCKET).delete(file.objectPath)
     }
 
     /** Reemplaza el repertorio completo de un Culto en una sola transacción. */
@@ -1297,6 +1373,27 @@ private data class SupabaseRecordFile(
     @SerialName("content_type") val contentType: String,
     @SerialName("size_bytes") val sizeBytes: Long,
     @SerialName("object_path") val objectPath: String,
+)
+
+@Serializable
+private data class SupabaseSongFile(
+    val id: String,
+    @SerialName("song_id") val songId: String,
+    @SerialName("file_name") val fileName: String,
+    @SerialName("content_type") val contentType: String,
+    @SerialName("size_bytes") val sizeBytes: Long,
+    @SerialName("object_path") val objectPath: String,
+)
+
+@Serializable
+private data class SongFileInsert(
+    val id: String,
+    @SerialName("song_id") val songId: String,
+    @SerialName("file_name") val fileName: String,
+    @SerialName("content_type") val contentType: String,
+    @SerialName("size_bytes") val sizeBytes: Long,
+    @SerialName("object_path") val objectPath: String,
+    @SerialName("uploaded_by") val uploadedBy: String,
 )
 
 @Serializable

@@ -477,6 +477,8 @@ fun FullScreenForm(
     }
 }
 
+private val LineBreaks = Regex("[\\r\\n]+")
+
 @Composable
 fun TextInput(
     value: String,
@@ -493,7 +495,8 @@ fun TextInput(
 ) {
     OutlinedTextField(
         value = value,
-        onValueChange = onValueChange,
+        // Un campo de una línea no debe guardar saltos de línea, ni siquiera al pegar texto.
+        onValueChange = { onValueChange(if (singleLine) it.replace(LineBreaks, " ") else it) },
         modifier = modifier.fillMaxWidth(),
         label = { Text(if (required) "$label *" else label) },
         placeholder = placeholder?.let { { Text(it) } },
