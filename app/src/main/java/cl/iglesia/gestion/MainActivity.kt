@@ -304,7 +304,8 @@ private fun ChurchApp() {
                         authMessage = "Si el correo está registrado, te llegará un código. Escríbelo abajo junto con tu nueva contraseña." to false
                     } catch (error: CancellationException) {
                         throw error
-                    } catch (_: Exception) {
+                    } catch (error: Exception) {
+                        android.util.Log.w("ChurchApp", "No se pudo solicitar la recuperación", error)
                         authMessage = "No fue posible solicitar el restablecimiento. Revisa tu conexión e inténtalo de nuevo." to true
                     } finally {
                         authLoading = false
