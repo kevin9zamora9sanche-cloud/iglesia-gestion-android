@@ -703,7 +703,7 @@ fun NewUserForm(
             isError = email.isNotBlank() && !emailValid,
             supportingText = if (email.isNotBlank() && !emailValid) "Escribe un correo válido." else "Será su usuario para ingresar.",
         )
-        TextInput(phone, { phone = it }, "Teléfono", keyboardType = KeyboardType.Phone)
+        TextInput(phone, { phone = it }, "Teléfono (opcional)", keyboardType = KeyboardType.Phone)
         FieldLabel("Rol", required = true)
         ChoiceChips(Roles.all, role, { it }, { role = it })
         PasswordInput(password, { password = it }, "Contraseña temporal")
@@ -800,7 +800,7 @@ fun ProfileForm(
             }
         }
         TextInput(name, { name = it }, "Nombre completo", required = true)
-        TextInput(phone, { phone = it }, "Teléfono", keyboardType = KeyboardType.Phone)
+        TextInput(phone, { phone = it }, "Teléfono (opcional)", keyboardType = KeyboardType.Phone)
         FieldLabel("Rol", required = true)
         ChoiceChips(Roles.all, role, { it }, { role = it })
         if (isSelf && role != Roles.PASTOR) {

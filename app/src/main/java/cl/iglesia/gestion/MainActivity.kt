@@ -78,6 +78,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -98,7 +101,7 @@ enum class AppTab(val label: String, val icon: ImageVector) {
     More("Más", Icons.Outlined.Menu),
 }
 
-enum class MorePage { Menu, Worship, Records, Personnel, Notifications }
+enum class MorePage { Menu, Worship, Records, Personnel, Notifications, Privacy }
 
 /** Formularios que pueden abrirse sobre cualquier pantalla. */
 sealed interface FormRequest {
@@ -176,6 +179,9 @@ private fun ChurchApp() {
     var connectionError by remember { mutableStateOf(false) }
     /** Ya se envió el código de recuperación: la pantalla pide código y nueva contraseña. */
     var resetCodeSent by rememberSaveable { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    /** Usuario que aceptó la versión vigente de las políticas en este dispositivo. */
+    var consentedUserId by remember { mutableStateOf<String?>(null) }
 
     suspend fun reload(member: Member) {
         modulesLoading = true
@@ -332,6 +338,15 @@ private fun ChurchApp() {
                         authLoading = false
                     }
                 }
+            },
+        )
+        consentedUserId != member.id && !hasCurrentConsent(context, member.id) -> ConsentScreen(
+            onAccept = {
+                saveConsent(context, member.id)
+                consentedUserId = member.id
+            },
+            onDecline = {
+                coroutineScope.launch { runCatching { SupabaseBackend.client.auth.signOut() } }
             },
         )
         else -> {
@@ -549,7 +564,13 @@ private fun ChurchApp() {
                                         onPersonnel = { morePage = MorePage.Personnel },
                                         onNotifications = { morePage = MorePage.Notifications },
                                         onChangePassword = { openFormRequest(FormRequest.ChangePassword) },
+                                        onPrivacy = { morePage = MorePage.Privacy },
                                         onLogout = { confirmLogout = true },
+                                    )
+                                    MorePage.Privacy -> PrivacyScreen(
+                                        member = member,
+                                        onBack = { morePage = MorePage.Menu },
+                                        onError = { message -> coroutineScope.launch { snackbar.showSnackbar(message) } },
                                     )
                                     MorePage.Worship -> WorshipScreen(
                                         activities = activities,
@@ -960,8 +981,10 @@ private fun ChurchTopBar(member: Member, unread: Int, onNotifications: () -> Uni
     TopAppBar(
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Símbolo decorativo: el lector de pantalla lee solo el nombre de la iglesia.
                 Box(
-                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.14f)),
+                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.14f))
+                        .clearAndSetSemantics {},
                     contentAlignment = Alignment.Center,
                 ) { Text("✝", color = Gold, fontSize = 20.sp) }
                 Spacer(Modifier.width(10.dp))
@@ -982,9 +1005,12 @@ private fun ChurchTopBar(member: Member, unread: Int, onNotifications: () -> Uni
                 }
             }
             Box {
-                IconButton(onClick = { menuOpen = true }) {
+                IconButton(
+                    onClick = { menuOpen = true },
+                    modifier = Modifier.semantics { contentDescription = "Menú de cuenta de ${member.name}" },
+                ) {
                     Box(
-                        Modifier.size(34.dp).clip(RoundedCornerShape(50)).background(Gold),
+                        Modifier.size(34.dp).clip(RoundedCornerShape(50)).background(Gold).clearAndSetSemantics {},
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(member.initials, color = Brand, style = MaterialTheme.typography.labelLarge)
@@ -1027,6 +1053,11 @@ private fun LoginScreen(
     var showPassword by remember { mutableStateOf(false) }
     var resetMode by rememberSaveable { mutableStateOf(false) }
     var code by rememberSaveable { mutableStateOf("") }
+    var reading by remember { mutableStateOf<LegalDocument?>(null) }
+    reading?.let { document ->
+        LegalDocumentScreen(document, onBack = { reading = null })
+        return
+    }
     val emailValid = android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()
     // Paso 2 de la recuperación: código del correo y contraseña nueva.
     val confirmingReset = resetMode && resetCodeSent
@@ -1059,7 +1090,8 @@ private fun LoginScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(
-                Modifier.size(64.dp).clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = 0.14f)),
+                Modifier.size(64.dp).clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = 0.14f))
+                    .clearAndSetSemantics {},
                 contentAlignment = Alignment.Center,
             ) { Text("✝", color = Gold, fontSize = 32.sp) }
             Spacer(Modifier.height(16.dp))
@@ -1197,6 +1229,7 @@ private fun LoginScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary,
             )
+            LegalLinks(onOpen = { reading = it })
         }
     }
 }

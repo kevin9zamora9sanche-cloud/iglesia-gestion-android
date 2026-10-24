@@ -267,6 +267,9 @@ Reglas del proyecto:
 - No debilites las políticas RLS ni agregues credenciales al cliente.
 - Los requerimientos funcionales están en
   [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- Los pasos legales para publicar en Google Play (privacidad, términos,
+  seguridad de datos y eliminación de cuentas) están en
+  [`PUBLICACION_PLAY_STORE.md`](PUBLICACION_PLAY_STORE.md).
 
 ---
 

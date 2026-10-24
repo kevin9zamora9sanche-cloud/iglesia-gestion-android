@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.PersonAddAlt
+import androidx.compose.material.icons.outlined.PrivacyTip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -65,6 +66,7 @@ fun MoreScreen(
     onPersonnel: () -> Unit,
     onNotifications: () -> Unit,
     onChangePassword: () -> Unit,
+    onPrivacy: () -> Unit,
     onLogout: () -> Unit,
 ) {
     LazyColumn(
@@ -115,6 +117,7 @@ fun MoreScreen(
                 onClick = onNotifications,
             )
         }
+        item { MoreOption(Icons.Outlined.PrivacyTip, "Privacidad y datos", "Políticas, licencias y eliminación de tu cuenta", onClick = onPrivacy) }
         item { MoreOption(Icons.AutoMirrored.Outlined.Logout, "Cerrar sesión", "Salir de tu cuenta en este dispositivo", tint = Danger, onClick = onLogout) }
     }
 }
