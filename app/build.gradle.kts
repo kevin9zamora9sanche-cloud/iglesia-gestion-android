@@ -14,17 +14,27 @@ val supabaseProperties = Properties().apply {
     }
 }
 
+// Llave de subida a Google Play. keystore.properties no se versiona; sin él, el
+// bundle de release se genera sin firmar.
+val keystoreProperties = Properties().apply {
+    val propertiesFile = rootProject.file("keystore.properties")
+    if (propertiesFile.exists()) {
+        propertiesFile.inputStream().use(::load)
+    }
+}
+
 fun String.toBuildConfigLiteral(): String =
     "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
     namespace = "cl.iglesia.gestion"
-    compileSdk = 35
+    // Google Play exige targetSdk 36 (Android 16) desde el 31 de agosto de 2026.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "cl.iglesia.gestion"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 2
         versionName = "1.0"
         buildConfigField(
@@ -37,6 +47,25 @@ android {
             "SUPABASE_ANON_KEY",
             (supabaseProperties.getProperty("supabase.anon_key") ?: "").toBuildConfigLiteral(),
         )
+    }
+
+    signingConfigs {
+        if (keystoreProperties.isNotEmpty()) {
+            create("upload") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Sin R8: supabase-kt y kotlinx.serialization necesitan reglas propias que aún no están probadas.
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("upload")
+        }
     }
 
     compileOptions {

@@ -140,3 +140,21 @@ cuenta.
 - La administración ejecuta la eliminación de forma manual. Google Play acepta
   que la app solo permita iniciar la solicitud.
 - Este documento no reemplaza la revisión de un abogado.
+
+## 6. Generar el bundle firmado
+
+1. Crea la llave de subida una sola vez (pide contraseñas y datos):
+
+   ```sh
+   keytool -genkeypair -v -keystore upload-keystore.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000
+   ```
+
+2. Copia `keystore.properties.example` como `keystore.properties` y completa
+   las contraseñas. Ambos archivos están en `.gitignore`.
+3. Respalda `upload-keystore.jks` y sus contraseñas fuera del repositorio. Si se
+   pierden, hay que pedir a Google un restablecimiento de la llave de subida.
+4. Genera el bundle con `gradlew.bat :app:bundleRelease`. El archivo queda en
+   `app/build/outputs/bundle/release/app-release.aab`.
+5. En Play Console, activa la firma de apps de Google Play y sube el `.aab`
+   primero a "Prueba interna".
+6. Cada nueva subida necesita un `versionCode` mayor en `app/build.gradle.kts`.

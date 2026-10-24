@@ -9,3 +9,8 @@ captures/
 
 # Configuración local de editores
 .vscode/
+
+# Firma de release (nunca subir la llave ni sus contraseñas)
+keystore.properties
+*.jks
+*.keystore
