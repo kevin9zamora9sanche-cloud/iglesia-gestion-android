@@ -1129,7 +1129,7 @@ private fun LoginScreen(
                         singleLine = true,
                         isError = email.isNotBlank() && !emailValid,
                         supportingText = if (email.isNotBlank() && !emailValid) {
-                            { Text("Escribe un correo válido, por ejemplo nombre@iglesia.cl") }
+                            { Text("Escribe un correo válido, por ejemplo nombre@gmail.com") }
                         } else {
                             null
                         },

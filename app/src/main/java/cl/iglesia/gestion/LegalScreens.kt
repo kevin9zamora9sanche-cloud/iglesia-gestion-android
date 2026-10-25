@@ -56,10 +56,10 @@ import androidx.compose.ui.unit.dp
  */
 object LegalInfo {
     const val ORGANIZATION = "Centro Mundial de Adoración y Alabanza"
-    // REEMPLAZAR antes de publicar: correo que atiende solicitudes de privacidad.
-    const val CONTACT_EMAIL = "REEMPLAZAR@correo-de-la-iglesia.cl"
-    // REEMPLAZAR antes de publicar: dirección o ciudad de la iglesia.
-    const val ADDRESS = "REEMPLAZAR: dirección, comuna, Chile"
+    const val CONTACT_EMAIL = "SoporteTecCMAA@gmail.com"
+    const val ADDRESS = "Calle 23 # 24 - 58, Tuluá, Colombia, 763021"
+    /** Área que atiende consultas y reclamos (Ley 1581 de 2012). */
+    const val SUPPORT_AREA = "Soporte Técnico CMAA"
     const val WEB_BASE = "https://kevin9zamora9sanche-cloud.github.io/iglesia-gestion-android"
     const val PRIVACY_URL = "$WEB_BASE/privacidad.html"
     const val TERMS_URL = "$WEB_BASE/terminos.html"
@@ -80,7 +80,9 @@ private class LegalSection(val title: String, val body: String)
 private val privacySections = listOf(
     LegalSection(
         "Responsable",
-        "${LegalInfo.ORGANIZATION} (\"la Iglesia\"), ${LegalInfo.ADDRESS}. Contacto para privacidad: ${LegalInfo.CONTACT_EMAIL}.",
+        "${LegalInfo.ORGANIZATION} (\"la Iglesia\") es responsable del tratamiento. Domicilio: ${LegalInfo.ADDRESS}. " +
+            "Correo: ${LegalInfo.CONTACT_EMAIL}. Área que atiende consultas y reclamos: ${LegalInfo.SUPPORT_AREA}. Esta política " +
+            "aplica la Ley 1581 de 2012 y el Decreto 1377 de 2013 (compilado en el Decreto 1074 de 2015).",
     ),
     LegalSection(
         "Qué datos tratamos",
@@ -95,8 +97,10 @@ private val privacySections = listOf(
     ),
     LegalSection(
         "Datos sensibles",
-        "Pertenecer a una iglesia o a sus ministerios puede revelar convicciones religiosas, que la ley chilena considera datos " +
-            "sensibles. Por eso pedimos tu consentimiento expreso antes de usar la aplicación, y esos datos solo se usan dentro de la Iglesia.",
+        "Tu pertenencia a la Iglesia y a sus ministerios puede revelar tus convicciones religiosas, que la Ley 1581 de 2012 considera " +
+            "datos sensibles. La Iglesia, como entidad sin ánimo de lucro con fines religiosos, los trata solo respecto de sus miembros y " +
+            "no los entrega a terceros sin tu autorización (artículo 6, literal d). Además te pedimos autorización previa, expresa e " +
+            "informada. No estás obligado a autorizar el tratamiento de datos sensibles, pero sin esa autorización no puedes usar la aplicación.",
     ),
     LegalSection(
         "Para qué los usamos",
@@ -107,8 +111,8 @@ private val privacySections = listOf(
     LegalSection(
         "Quién puede verlos",
         "Según tu rol: el Pastor/Administrador y los líderes de tus ministerios ven los datos necesarios para su labor. Los datos se " +
-            "alojan en Supabase, proveedor que actúa como encargado del tratamiento y puede almacenarlos fuera de Chile con medidas de " +
-            "seguridad equivalentes. Solo los entregaremos a una autoridad cuando la ley lo exija.",
+            "alojan en Supabase, proveedor que actúa como encargado del tratamiento y los almacena en servidores fuera de Colombia. Esta " +
+            "transmisión internacional se hace con medidas de seguridad adecuadas, conforme al Decreto 1377 de 2013. Solo los entregaremos a una autoridad cuando la ley lo exija.",
     ),
     LegalSection(
         "Seguridad",
@@ -117,14 +121,15 @@ private val privacySections = listOf(
     ),
     LegalSection(
         "Cuánto tiempo los conservamos",
-        "Mientras tu cuenta esté activa. Si pides eliminarla, borramos o anonimizamos tus datos personales en un máximo de 30 días, " +
+        "Mientras tu cuenta esté activa. Si pides eliminarla, borramos o anonimizamos tus datos personales en un máximo de 15 días hábiles, " +
             "salvo lo que la ley obligue a conservar. El contenido que pertenece a la Iglesia (por ejemplo, actas) puede mantenerse sin tus datos de contacto.",
     ),
     LegalSection(
         "Tus derechos",
-        "Puedes pedir acceso, rectificación, supresión, oposición, portabilidad y bloqueo de tus datos, y retirar tu consentimiento, " +
-            "escribiendo a ${LegalInfo.CONTACT_EMAIL}. Responderemos en los plazos legales. Si no quedas conforme, puedes recurrir a la " +
-            "autoridad de protección de datos competente.",
+        "Puedes conocer, actualizar y rectificar tus datos; pedir prueba de tu autorización; saber cómo se usan; revocar la " +
+            "autorización o pedir su supresión; y acceder a ellos gratis. Escribe a ${LegalInfo.CONTACT_EMAIL}. Respondemos consultas " +
+            "en máximo 10 días hábiles y reclamos en máximo 15 días hábiles (artículos 14 y 15 de la Ley 1581 de 2012). Si no quedas " +
+            "conforme, puedes presentar una queja ante la Superintendencia de Industria y Comercio (SIC).",
     ),
     LegalSection(
         "Menores de edad",
@@ -179,7 +184,7 @@ private val termsSections = listOf(
     ),
     LegalSection(
         "Ley aplicable y contacto",
-        "Estos términos se rigen por las leyes de Chile. Consultas: ${LegalInfo.CONTACT_EMAIL}. Versión vigente: ${LegalInfo.POLICY_VERSION}.",
+        "Estos términos se rigen por las leyes de Colombia. Consultas: ${LegalInfo.CONTACT_EMAIL}. Versión vigente: ${LegalInfo.POLICY_VERSION}.",
     ),
 )
 
@@ -270,7 +275,7 @@ fun ConsentScreen(onAccept: () -> Unit, onDecline: () -> Unit) {
         ConsentCheck(
             checked = acceptsSensitive,
             onChange = { acceptsSensitive = it },
-            text = "Autorizo que se registre mi participación en la Iglesia y sus ministerios, un dato que puede revelar mis convicciones religiosas.",
+            text = "Autorizo de forma previa, expresa e informada el tratamiento de mi participación en la Iglesia y sus ministerios, un dato sensible que puede revelar mis convicciones religiosas.",
         )
         ConsentCheck(
             checked = isAdult,
@@ -402,7 +407,7 @@ fun PrivacyScreen(
             LegalOption(
                 Icons.Outlined.DeleteForever,
                 "Solicitar eliminación de mi cuenta",
-                "Borraremos tu cuenta y tus datos personales en un máximo de 30 días",
+                "Borraremos tu cuenta y tus datos personales en un máximo de 15 días hábiles",
                 tint = Danger,
             ) { confirmDeletion = true }
         }
@@ -412,7 +417,7 @@ fun PrivacyScreen(
         ConfirmDialog(
             title = "¿Eliminar tu cuenta?",
             message = "Se abrirá tu correo con la solicitud lista para enviar a ${LegalInfo.CONTACT_EMAIL}. " +
-                "La administración eliminará tu cuenta y tus datos personales en un máximo de 30 días y te confirmará por correo.",
+                "La administración eliminará tu cuenta y tus datos personales en un máximo de 15 días hábiles y te confirmará por correo.",
             confirmLabel = "Continuar",
             destructive = true,
             onDismiss = { confirmDeletion = false },

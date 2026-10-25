@@ -1,25 +1,29 @@
 # Publicación en Google Play: cumplimiento legal
 
 Guía para publicar Gestión Iglesia (`cl.iglesia.gestion`) cumpliendo las
-políticas de Google Play y la ley chilena de datos personales (Ley 19.628 y
-Ley 21.719).
+políticas de Google Play y la ley colombiana de protección de datos personales
+(Ley 1581 de 2012 y Decreto 1377 de 2013, compilado en el Decreto 1074 de 2015).
+
+Responsable: Centro Mundial de Adoración y Alabanza, Calle 23 # 24 - 58, Tuluá,
+Colombia, 763021. Correo de privacidad: SoporteTecCMAA@gmail.com.
 
 ## 1. Antes de compilar el AAB
 
-1. Reemplaza los valores marcados `REEMPLAZAR` (correo de privacidad y
-   dirección) en:
-   - `app/src/main/java/cl/iglesia/gestion/LegalScreens.kt` (`LegalInfo`)
-   - `docs/privacidad.html`, `docs/terminos.html`, `docs/eliminar-cuenta.html`
-     y `docs/index.html`
-   Busca los pendientes con `git grep REEMPLAZAR`.
-2. Usa un correo que alguien revise: por él llegan las solicitudes de
-   eliminación y de derechos.
-3. Activa GitHub Pages: Settings > Pages > Deploy from a branch > `main` /
+1. Los datos del responsable están en
+   `app/src/main/java/cl/iglesia/gestion/LegalScreens.kt` (`LegalInfo`) y en
+   `docs/*.html`. Si cambian, actualiza ambos lugares.
+2. Revisa SoporteTecCMAA@gmail.com con frecuencia: por ahí llegan las
+   solicitudes de eliminación, las consultas (máximo 10 días hábiles para
+   responder) y los reclamos (máximo 15 días hábiles).
+3. Registro Nacional de Bases de Datos (RNBD) de la SIC: solo es obligatorio
+   para entidades con activos totales superiores a 100.000 UVT. Si la iglesia
+   no los supera, no necesita inscribir la base.
+4. Activa GitHub Pages: Settings > Pages > Deploy from a branch > `main` /
    `/docs`. Comprueba que abran estas tres URL:
    - https://kevin9zamora9sanche-cloud.github.io/iglesia-gestion-android/privacidad.html
    - https://kevin9zamora9sanche-cloud.github.io/iglesia-gestion-android/terminos.html
    - https://kevin9zamora9sanche-cloud.github.io/iglesia-gestion-android/eliminar-cuenta.html
-4. Si cambias el texto de las políticas, cambia también
+5. Si cambias el texto de las políticas, cambia también
    `LegalInfo.POLICY_VERSION`. Así la app vuelve a pedir el consentimiento.
 
 ## 2. Play Console
@@ -91,7 +95,7 @@ identificadores de dispositivo ni diagnósticos: la app no los recopila.
 | 13 | Texto alternativo | Sí | Los íconos con acción ya tenían `contentDescription`. Se añadió al avatar del menú de cuenta y se ocultaron al lector los símbolos decorativos. |
 | 14 | Corrección de colores | Sí | `TextMuted` pasó a `#5B6B80`: ahora cumple 4.5:1 sobre todos los fondos |
 | 15 | Navegación con teclado | Sí | En Compose los controles son enfocables. Las casillas usan `toggleable` con rol Checkbox. |
-| 16 | Datos del negocio | Sí | `LegalInfo` y Más > Privacidad y datos. Faltan los valores `REEMPLAZAR`. |
+| 16 | Datos del negocio | Sí | `LegalInfo` y Más > Privacidad y datos: nombre, dirección en Tuluá, correo y área de soporte |
 | 17 | Consentimiento parental | Evitado | App solo para mayores de 18 (casilla y público objetivo 18+) |
 | 18 | Link de baja | No: no hay correos de marketing | Los avisos solo aparecen dentro de la app |
 | 19 | Licencia de imágenes | Sí | Ícono propio y Más > Privacidad y datos > Licencias. Los términos exigen derechos sobre los archivos subidos. |
@@ -130,7 +134,7 @@ cuenta.
    ```
 
 3. Borra de Storage los archivos personales que la persona pida eliminar.
-4. Confirma la eliminación por correo dentro de 30 días.
+4. Confirma la eliminación por correo dentro de 15 días hábiles (artículo 15 de la Ley 1581 de 2012).
 
 ## 5. Límites conocidos
 

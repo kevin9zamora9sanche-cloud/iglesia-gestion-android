@@ -96,7 +96,7 @@ fun rememberFilePicker(onPicked: (List<PickedFile>) -> Unit, onError: (String) -
 }
 
 fun Long.fileSizeLabel(): String = when {
-    this >= 1024 * 1024 -> String.format(ChileLocale, "%.1f MB", this / (1024.0 * 1024.0))
+    this >= 1024 * 1024 -> String.format(AppLocale, "%.1f MB", this / (1024.0 * 1024.0))
     this >= 1024 -> "${this / 1024} KB"
     else -> "$this B"
 }

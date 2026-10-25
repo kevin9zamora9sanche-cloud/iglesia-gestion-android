@@ -95,24 +95,24 @@ import java.util.Locale
 
 // Formato ---------------------------------------------------------------------
 
-val ChileLocale: Locale = Locale("es", "CL")
+val AppLocale: Locale = Locale("es", "CO")
 
-private fun String.capitalized(): String = replaceFirstChar { it.titlecase(ChileLocale) }
+private fun String.capitalized(): String = replaceFirstChar { it.titlecase(AppLocale) }
 
 fun LocalDate.longLabel(): String =
-    format(DateTimeFormatter.ofPattern("EEEE d 'de' MMMM", ChileLocale)).capitalized()
+    format(DateTimeFormatter.ofPattern("EEEE d 'de' MMMM", AppLocale)).capitalized()
 
 fun LocalDate.shortLabel(): String =
-    format(DateTimeFormatter.ofPattern("EEE d MMM", ChileLocale)).replace(".", "").capitalized()
+    format(DateTimeFormatter.ofPattern("EEE d MMM", AppLocale)).replace(".", "").capitalized()
 
 fun LocalDate.fieldLabel(): String =
-    format(DateTimeFormatter.ofPattern("d MMM yyyy", ChileLocale)).replace(".", "")
+    format(DateTimeFormatter.ofPattern("d MMM yyyy", AppLocale)).replace(".", "")
 
 fun LocalDate.monthLabel(): String =
-    format(DateTimeFormatter.ofPattern("MMMM yyyy", ChileLocale)).capitalized()
+    format(DateTimeFormatter.ofPattern("MMMM yyyy", AppLocale)).capitalized()
 
 fun LocalDate.weekdayInitials(): String =
-    format(DateTimeFormatter.ofPattern("EEE", ChileLocale)).replace(".", "").take(3).capitalized()
+    format(DateTimeFormatter.ofPattern("EEE", AppLocale)).replace(".", "").take(3).capitalized()
 
 /** "Hoy", "Mañana", "Ayer" o la fecha corta. */
 fun LocalDate.relativeLabel(today: LocalDate = LocalDate.now()): String = when (this) {
@@ -145,7 +145,7 @@ fun OffsetDateTime.relativeLabel(now: OffsetDateTime = OffsetDateTime.now()): St
 }
 
 fun Long.toCLPCurrency(): String =
-    "$" + String.format(ChileLocale, "%,d", this).replace(',', '.')
+    "$" + String.format(AppLocale, "%,d", this).replace(',', '.')
 
 fun String.toPriorityLabel(): String = when (this) {
     "high" -> "Alta"
@@ -166,7 +166,7 @@ fun ScreenHeader(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
-        Text(eyebrow.uppercase(ChileLocale), style = MaterialTheme.typography.labelSmall, color = GoldText)
+        Text(eyebrow.uppercase(AppLocale), style = MaterialTheme.typography.labelSmall, color = GoldText)
         Spacer(Modifier.height(2.dp))
         Text(
             title,
@@ -537,7 +537,7 @@ private fun PickerField(
         )
     }
     if (onClear != null && value.isNotBlank()) {
-        TextButton(onClick = onClear) { Text("Quitar ${label.lowercase(ChileLocale).removeSuffix(" *")}") }
+        TextButton(onClick = onClear) { Text("Quitar ${label.lowercase(AppLocale).removeSuffix(" *")}") }
     }
 }
 
