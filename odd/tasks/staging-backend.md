@@ -49,7 +49,8 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
   paths, file types) is covered with JUnit via `./gradlew testDebugUnitTest`.
   Network/UI code is verified by `./gradlew assembleDebug` and manual checks
   against staging.
-- JDK: Android Studio JBR (`C:\Program Files\Android\Android Studio\jbr`), JDK 17+ required.
+- JDK: `C:\Program Files\Java\jdk-21` (Android Studio JBR is JDK 25, unsupported by Gradle 8.9).
+- Gradle flags (low resource usage, user request): `--max-workers=1 -Dorg.gradle.jvmargs=-Xmx1g --no-daemon`.
 
 ## Delivery
 - RDD: off (global), no native review.
@@ -62,11 +63,11 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
 - T1+T2: delegated direct (writer trigger: 2+ non-trivial files).
 
 ## Tasks
-- [ ] T1 Config and cleanup: staging URL/key in `supabase.properties`, remove
+- [x] T1 Config and cleanup: staging URL/key in `supabase.properties`, remove
   `supabase/migrations`, `supabase/functions/admin-users`, `supabase/config.toml`
   old ref, update README/CONTRIBUTING/PUBLICACION_PLAY_STORE/supabase README
   to point at CMAA for schema. Add `.mcp.json` (staging only).
-- [ ] T2 Mapping foundation: JUnit setup + pure mappers (roles, status, activity
+- [x] T2 Mapping foundation: JUnit setup + pure mappers (roles, status, activity
   type, classification, priority, visibility scope, file type, storage path) with tests.
 - [ ] T3 Auth and profile: `usuario` profile load, `estado` check, leader
   detection via `miembro_ministerio.es_lider`, forced password change when
@@ -91,6 +92,12 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
 ## Progress
 - Worktree and branch created from `main` (bff1234).
 - Mapping report gathered (Engram `discovery/staging-schema-gap`).
+- T1 done: f3e9998 (grep: old project id only in this doc).
+- T2 done: dee74dd (RED: compile failure on unresolved `StagingMappings`;
+  GREEN: 15 tests, 0 failures; `assembleDebug` OK).
+- Mapper fallbacks: cancelled -> EN_PAUSA, unknown status -> POR_HACER,
+  unknown role -> LIDER_NORMAL, unknown visibility -> Selected, unknown type -> LIBRE.
+  Mappers take app internal values, not DB strings.
 
 ## Next step
-Choose chain strategy, then T1.
+T3 Auth and profile.
