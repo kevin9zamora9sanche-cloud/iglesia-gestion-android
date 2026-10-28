@@ -34,7 +34,7 @@ val WarningSurface = Color(0xFFFEF3C7)
 val Danger = Color(0xFFB42318)
 val DangerSurface = Color(0xFFFEE4E2)
 
-/** Colores semánticos por estado: Por hacer, En curso, En pausa, Completada, Cancelada. */
+/** Colores semánticos por estado: Por hacer, En curso, En pausa, Completada. */
 data class StatusStyle(val label: String, val content: Color, val container: Color)
 
 fun statusStyle(status: String, feminine: Boolean = true): StatusStyle = when (status) {
@@ -42,7 +42,6 @@ fun statusStyle(status: String, feminine: Boolean = true): StatusStyle = when (s
     "in_progress" -> StatusStyle("En curso", BrandLight, BrandSurface)
     "paused" -> StatusStyle("En pausa", Warning, WarningSurface)
     "completed" -> StatusStyle(if (feminine) "Completada" else "Completado", Success, SuccessSurface)
-    "cancelled" -> StatusStyle(if (feminine) "Cancelada" else "Cancelado", Danger, DangerSurface)
     else -> StatusStyle("Sin estado", TextSecondary, MutedSurface)
 }
 

@@ -354,16 +354,18 @@ object SupabaseBackend {
                 )
             }
 
-        val notifications = client.from("notifications")
+        // RLS: cada persona ve solo sus avisos; los crean los triggers de la base de datos.
+        val notifications = client.from("notificacion")
             .select { order("created_at", Order.DESCENDING) }
-            .decodeList<SupabaseNotification>()
+            .decodeList<NotificacionRow>()
             .map {
                 ChurchNotification(
                     id = it.id,
-                    message = it.message,
-                    type = it.type,
+                    message = it.mensaje,
+                    kind = StagingNotifications.kindOf(it.tipo),
+                    itemId = StagingNotifications.targetItemId(it.entidadTipo, it.entidadId),
                     createdAt = parseTimestamp(it.createdAt),
-                    read = it.read,
+                    read = it.leida,
                 )
             }
 
@@ -820,19 +822,20 @@ object SupabaseBackend {
         client.from("comentario_tarea").insert(ComentarioTareaInsert(taskId, currentMember.id, clean))
     }
 
+    /** Solo `leida` puede cambiar (un trigger lo exige); RLS limita el cambio a los avisos propios. */
     suspend fun markNotificationRead(notificationId: String) {
-        client.from("notifications").update(NotificationReadUpdate(read = true)) {
-            filter {
-                eq("id", notificationId)
-            }
-        }
+        val updated = client.from("notificacion").update(NotificacionLeidaUpdate(leida = true)) {
+            select()
+            filter { eq("id", notificationId) }
+        }.decodeList<IdRow>()
+        if (updated.isEmpty()) throw UserFacingException("No se pudo marcar el aviso como leído.")
     }
 
     suspend fun markAllNotificationsRead(currentMember: Member) {
-        client.from("notifications").update(NotificationReadUpdate(read = true)) {
+        client.from("notificacion").update(NotificacionLeidaUpdate(leida = true)) {
             filter {
-                eq("user_id", currentMember.id)
-                eq("read", false)
+                eq("destinatario_id", currentMember.id)
+                eq("leida", false)
             }
         }
     }
@@ -1264,15 +1267,6 @@ private data class ResponsableNombreRow(
 )
 
 @Serializable
-private data class SupabaseNotification(
-    val id: String,
-    val message: String,
-    val type: String,
-    @SerialName("created_at") val createdAt: String,
-    val read: Boolean,
-)
-
-@Serializable
 private data class ProyectoRow(
     val id: String,
     val nombre: String,
@@ -1395,7 +1389,18 @@ private data class ComentarioTareaRow(
 )
 
 @Serializable
-private data class NotificationReadUpdate(val read: Boolean)
+private data class NotificacionRow(
+    val id: String,
+    val tipo: String,
+    val mensaje: String,
+    @SerialName("entidad_tipo") val entidadTipo: String? = null,
+    @SerialName("entidad_id") val entidadId: String? = null,
+    val leida: Boolean,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+private data class NotificacionLeidaUpdate(val leida: Boolean)
 
 @Serializable
 private data class ArchivoRow(

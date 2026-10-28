@@ -243,10 +243,12 @@ data class ChurchSnapshot(
     val meetingRecords: List<MeetingRecord> = emptyList(),
 )
 
+/** Fila de `notificacion` del usuario; [itemId] es la actividad o tarea a la que apunta, si existe. */
 data class ChurchNotification(
     val id: String,
     val message: String,
-    val type: String,
+    val kind: NotificationKind,
+    val itemId: String?,
     val createdAt: OffsetDateTime?,
     val read: Boolean,
 )

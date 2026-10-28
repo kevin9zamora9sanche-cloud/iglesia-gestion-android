@@ -674,6 +674,7 @@ private fun ChurchApp() {
                                                 SupabaseBackend.markAllNotificationsRead(member)
                                             }
                                         },
+                                        onOpenItem = { id -> detailItemId = id },
                                     )
                                 }
                             }
