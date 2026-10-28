@@ -55,6 +55,7 @@ object SupabaseBackend {
         }
     }
 
+    private const val PROJECT_DESCRIPTION_MAX = 2000
     private const val RECORDS_BUCKET = "meeting-records"
     private const val SONGS_BUCKET = "worship-songs"
 
@@ -162,33 +163,45 @@ object SupabaseBackend {
             .groupBy(SupabaseActivityAssignment::activityId)
             .mapValues { (_, rows) -> rows.map(SupabaseActivityAssignment::userId) }
 
-        val tasksByActivity = tasks.groupBy(SupabaseTask::activityId)
-        val activitiesByProject = activities
-            .filter { it.projectId != null && it.kind == "activity" }
-            .groupBy { it.projectId }
-        val projects = client.from("projects")
-            .select { order("due_date", Order.ASCENDING) }
-            .decodeList<SupabaseProject>()
+        val progressActivities = client.from("actividad")
+            .select()
+            .decodeList<ProgressActividadRow>()
+        val progressTasks = client.from("tarea")
+            .select()
+            .decodeList<ProgressTareaRow>()
+            .groupBy(ProgressTareaRow::actividadId)
+        // El avance se calcula aquí con lo visible por RLS (staging no guarda una columna de avance).
+        val progressByProject = progressActivities
+            .filter { it.proyectoId != null }
+            .groupBy { it.proyectoId!! }
+            .mapValues { (_, rows) ->
+                ProjectProgress.percent(
+                    rows.map { row ->
+                        ProjectProgress.Item(
+                            StagingMappings.statusFromStaging(row.estado),
+                            progressTasks[row.id].orEmpty().map { StagingMappings.statusFromStaging(it.estado) },
+                        )
+                    },
+                )
+            }
+        val projects = client.from("proyecto")
+            .select { order("fecha_cierre_estimada", Order.ASCENDING) }
+            .decodeList<ProyectoRow>()
             .map { project ->
+                val created = project.createdAt?.let(::parseTimestamp)?.toLocalDate()
+                val start = project.fechaInicio?.let(LocalDate::parse) ?: created ?: LocalDate.now()
                 ChurchProject(
                     id = project.id,
-                    name = project.name,
-                    objective = project.objective,
-                    description = project.description,
-                    leaderId = project.leaderId,
-                    startDate = LocalDate.parse(project.startDate),
-                    dueDate = LocalDate.parse(project.dueDate),
-                    // El Pastor ve todas las actividades y tareas, así que el cálculo
-                    // local es exacto e inmediato. Los demás ven solo una parte por RLS:
-                    // para ellos se usa el avance que la base recalcula con todo.
-                    progress = if (currentMember.isPastor) {
-                        calculateProjectProgress(activitiesByProject[project.id].orEmpty(), tasksByActivity)
-                    } else {
-                        project.progress.coerceIn(0, 100)
-                    },
-                    status = project.status,
-                    budgetEstimated = project.budget?.toLong(),
-                    budgetExecuted = project.budgetExecuted?.toLong(),
+                    name = project.nombre,
+                    objective = project.objetivo.orEmpty(),
+                    description = project.descripcion.orEmpty(),
+                    leaderId = project.responsableId ?: project.createdBy.orEmpty(),
+                    startDate = start,
+                    dueDate = project.fechaCierreEstimada?.let(LocalDate::parse) ?: start,
+                    progress = progressByProject[project.id] ?: 0,
+                    status = StagingMappings.statusFromStaging(project.estado),
+                    budgetEstimated = project.presupuestoEstimado?.toLong(),
+                    budgetExecuted = project.presupuestoEjecutado?.toLong(),
                 )
             }
 
@@ -474,18 +487,20 @@ object SupabaseBackend {
         require(currentMember.isPastor) {
             "Solo el Pastor/Administrador puede crear proyectos."
         }
-        client.from("projects").insert(
-            ProjectInsert(
-                id = UUID.randomUUID().toString(),
-                name = draft.name.trim(),
-                objective = draft.objective.trim(),
-                description = draft.description.trim(),
-                leaderId = draft.leaderId,
-                startDate = draft.startDate.toString(),
-                dueDate = draft.dueDate.toString(),
-                budget = draft.budgetEstimated,
-                budgetExecuted = draft.budgetExecuted,
-                status = draft.status,
+        require(draft.description.trim().length <= PROJECT_DESCRIPTION_MAX) {
+            "La descripción no puede superar $PROJECT_DESCRIPTION_MAX caracteres."
+        }
+        client.from("proyecto").insert(
+            ProyectoInsert(
+                nombre = draft.name.trim(),
+                objetivo = draft.objective.trim(),
+                descripcion = draft.description.trim().ifBlank { null },
+                responsableId = draft.leaderId,
+                fechaInicio = draft.startDate.toString(),
+                fechaCierreEstimada = draft.dueDate.toString(),
+                presupuestoEstimado = draft.budgetEstimated,
+                presupuestoEjecutado = draft.budgetExecuted,
+                estado = StagingMappings.statusToStaging(draft.status),
                 createdBy = currentMember.id,
             ),
         )
@@ -497,23 +512,28 @@ object SupabaseBackend {
         }
         val projectId = requireNotNull(draft.id) { "El proyecto a editar no es válido." }
         require(draft.status in WORK_STATUSES) { "El estado seleccionado no es válido." }
-        client.from("projects").update(
-            ProjectUpdatePayload(
-                name = draft.name.trim(),
-                objective = draft.objective.trim(),
-                description = draft.description.trim(),
-                leaderId = draft.leaderId,
-                startDate = draft.startDate.toString(),
-                dueDate = draft.dueDate.toString(),
-                budget = draft.budgetEstimated,
-                budgetExecuted = draft.budgetExecuted,
-                status = draft.status,
+        require(draft.description.trim().length <= PROJECT_DESCRIPTION_MAX) {
+            "La descripción no puede superar $PROJECT_DESCRIPTION_MAX caracteres."
+        }
+        val updated = client.from("proyecto").update(
+            ProyectoUpdate(
+                nombre = draft.name.trim(),
+                objetivo = draft.objective.trim(),
+                descripcion = draft.description.trim().ifBlank { null },
+                responsableId = draft.leaderId,
+                fechaInicio = draft.startDate.toString(),
+                fechaCierreEstimada = draft.dueDate.toString(),
+                presupuestoEstimado = draft.budgetEstimated,
+                presupuestoEjecutado = draft.budgetExecuted,
+                estado = StagingMappings.statusToStaging(draft.status),
             ),
         ) {
+            select()
             filter {
                 eq("id", projectId)
             }
-        }
+        }.decodeList<ProyectoRow>()
+        if (updated.isEmpty()) throw UserFacingException("No se pudo actualizar el proyecto: sin permiso.")
     }
 
     suspend fun createActivity(currentMember: Member, draft: ActivityDraft) {
@@ -976,26 +996,6 @@ object SupabaseBackend {
 /** Estados válidos de proyectos, actividades y tareas según los requerimientos. */
 val WORK_STATUSES = listOf("pending", "in_progress", "paused", "completed")
 
-/**
- * Avance propuesto: una actividad sin tareas vale 100 % solo si está completada;
- * con tareas, su fracción completada. El proyecto promedia sus actividades y
- * vale 0 cuando no tiene ninguna.
- */
-private fun calculateProjectProgress(
-    activities: List<SupabaseActivity>,
-    tasksByActivity: Map<String, List<SupabaseTask>>,
-): Int {
-    if (activities.isEmpty()) return 0
-    return activities.map { activity ->
-        val activityTasks = tasksByActivity[activity.id].orEmpty()
-        if (activityTasks.isEmpty()) {
-            if (activity.status == "completed") 100.0 else 0.0
-        } else {
-            activityTasks.count { it.status == "completed" } * 100.0 / activityTasks.size
-        }
-    }.average().roundToInt().coerceIn(0, 100)
-}
-
 private val MINISTRY_COLORS = listOf(
     0xFF2563EB,
     0xFF0F766E,
@@ -1091,21 +1091,6 @@ private fun String.isPublicClientKey(): Boolean {
         false
     }
 }
-
-@Serializable
-private data class SupabaseProject(
-    val id: String,
-    val name: String,
-    val objective: String = "",
-    val description: String,
-    @SerialName("leader_id") val leaderId: String,
-    @SerialName("start_date") val startDate: String,
-    @SerialName("due_date") val dueDate: String,
-    val budget: Double? = null,
-    @SerialName("budget_executed") val budgetExecuted: Double? = null,
-    val progress: Int = 0,
-    val status: String,
-)
 
 @Serializable
 private data class TaskAssigneeUpdate(
@@ -1207,31 +1192,59 @@ private data class SupabaseNotification(
 )
 
 @Serializable
-private data class ProjectInsert(
+private data class ProyectoRow(
     val id: String,
-    val name: String,
-    val objective: String,
-    val description: String,
-    @SerialName("leader_id") val leaderId: String,
-    @SerialName("start_date") val startDate: String,
-    @SerialName("due_date") val dueDate: String,
-    val budget: Long?,
-    @SerialName("budget_executed") val budgetExecuted: Long?,
-    val status: String,
+    val nombre: String,
+    val objetivo: String? = null,
+    val descripcion: String? = null,
+    @SerialName("responsable_id") val responsableId: String? = null,
+    @SerialName("fecha_inicio") val fechaInicio: String? = null,
+    @SerialName("fecha_cierre_estimada") val fechaCierreEstimada: String? = null,
+    @SerialName("presupuesto_estimado") val presupuestoEstimado: Double? = null,
+    @SerialName("presupuesto_ejecutado") val presupuestoEjecutado: Double? = null,
+    val estado: String? = null,
+    @SerialName("created_by") val createdBy: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+)
+
+@Serializable
+private data class ProyectoInsert(
+    val nombre: String,
+    val objetivo: String,
+    val descripcion: String?,
+    @SerialName("responsable_id") val responsableId: String,
+    @SerialName("fecha_inicio") val fechaInicio: String,
+    @SerialName("fecha_cierre_estimada") val fechaCierreEstimada: String,
+    @SerialName("presupuesto_estimado") val presupuestoEstimado: Long?,
+    @SerialName("presupuesto_ejecutado") val presupuestoEjecutado: Long?,
+    val estado: String,
     @SerialName("created_by") val createdBy: String,
 )
 
 @Serializable
-private data class ProjectUpdatePayload(
-    val name: String,
-    val objective: String,
-    val description: String,
-    @SerialName("leader_id") val leaderId: String,
-    @SerialName("start_date") val startDate: String,
-    @SerialName("due_date") val dueDate: String,
-    val budget: Long?,
-    @SerialName("budget_executed") val budgetExecuted: Long?,
-    val status: String,
+private data class ProyectoUpdate(
+    val nombre: String,
+    val objetivo: String,
+    val descripcion: String?,
+    @SerialName("responsable_id") val responsableId: String,
+    @SerialName("fecha_inicio") val fechaInicio: String,
+    @SerialName("fecha_cierre_estimada") val fechaCierreEstimada: String,
+    @SerialName("presupuesto_estimado") val presupuestoEstimado: Long?,
+    @SerialName("presupuesto_ejecutado") val presupuestoEjecutado: Long?,
+    val estado: String,
+)
+
+@Serializable
+private data class ProgressActividadRow(
+    val id: String,
+    @SerialName("proyecto_id") val proyectoId: String? = null,
+    val estado: String? = null,
+)
+
+@Serializable
+private data class ProgressTareaRow(
+    @SerialName("actividad_id") val actividadId: String,
+    val estado: String? = null,
 )
 
 @Serializable
