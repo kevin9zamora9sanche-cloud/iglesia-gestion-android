@@ -71,8 +71,9 @@ object StagingMappings {
 
     fun classificationToStaging(classification: Classification): String = when (classification) {
         Classification.Ministry -> "MINISTERIAL"
-        Classification.Project, Classification.General -> "PROYECTO"
-        Classification.Individual -> "INDIVIDUAL"
+        Classification.Project -> "PROYECTO"
+        // `actividad` forbids MINISTERIAL/PROYECTO without their id, so "general" is stored as INDIVIDUAL.
+        Classification.Individual, Classification.General -> "INDIVIDUAL"
     }
 
     /** `PROYECTO` maps to [Classification.Project]; unknown values to [Classification.General]. */

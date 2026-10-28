@@ -438,7 +438,7 @@ private fun ProjectCard(
         }
     }
     val completedActivities = activities.count { activityProgress(it) == 100 }
-    val finished = project.status == "completed" || project.status == "cancelled"
+    val finished = project.status == "completed"
     val overdue = !finished && project.dueDate.isBefore(today)
     AppCard(onClick = onToggle) {
         Row(verticalAlignment = Alignment.CenterVertically) {

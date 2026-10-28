@@ -166,14 +166,13 @@ fun ActivityForm(
     onSubmit: (ActivityDraft) -> Unit,
 ) {
     val availableMinistries = if (currentMember.isPastor) ministries else ministries.filter { it.id in currentMember.ledMinistryIds }
-    // La creación de actividades individuales sigue pendiente de validación: se
-    // mantiene restringida al Pastor, igual que la política RLS actual.
+    // Solo el Pastor crea actividades de proyecto o individuales (RLS de `actividad`).
     val classifications = if (currentMember.isPastor) {
-        listOf(Classification.Ministry, Classification.Project, Classification.General, Classification.Individual)
+        listOf(Classification.Ministry, Classification.Project, Classification.Individual)
     } else {
         listOf(Classification.Ministry)
     }
-    val openProjects = projects.filter { it.status != "completed" && it.status != "cancelled" }
+    val openProjects = projects.filter { it.status != "completed" }
     val types = ActivityTypes.all.filter { it != ActivityTypes.ENSAYO || permissions.canManageWorship }
 
     var title by rememberSaveable { mutableStateOf("") }
@@ -214,7 +213,8 @@ fun ActivityForm(
         Classification.Project -> openProjects.any { it.id == projectId }
         else -> currentMember.isPastor
     }
-    val cultoValid = !isCulto || (preacherId != null && worshipLeaderId != null)
+    // `detalle_culto` solo lo escribe el Pastor: para los demás roles esos campos no se muestran.
+    val cultoValid = !isCulto || !currentMember.isPastor || (preacherId != null && worshipLeaderId != null)
     val canSubmit = title.isNotBlank() && timesValid && targetValid && cultoValid && selectedAssignees.isNotEmpty()
 
     FullScreenForm(
@@ -281,7 +281,7 @@ fun ActivityForm(
                 ChoiceChips(openProjects, openProjects.firstOrNull { it.id == projectId }, { it.name }, { projectId = it.id })
             }
             Classification.Individual -> Text(
-                "Solo la verán el Pastor y las personas responsables.",
+                "Actividad sin ministerio ni proyecto.",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextMuted,
             )
@@ -315,7 +315,7 @@ fun ActivityForm(
         TextInput(location, { location = it }, "Lugar", placeholder = "Ej.: Santuario principal")
         TextInput(description, { description = it }, "Descripción", singleLine = false, minLines = 3)
 
-        if (isCulto) {
+        if (isCulto && currentMember.isPastor) {
             FieldLabel("Predicador", required = true)
             MemberPicker(activeMembers, setOfNotNull(preacherId), multiSelect = false, onChange = { preacherId = it.firstOrNull() }, emptyMessage = "No hay personas visibles.")
             FieldLabel("Director de alabanza", required = true)
@@ -409,7 +409,7 @@ fun TaskForm(
 ) {
     val today = LocalDate.now()
     val parents = activities
-        .filter { it.kind == ItemKind.Activity && !it.isLegacyTask && currentMember.canManageMinistry(it.ministryId) }
+        .filter { it.kind == ItemKind.Activity && currentMember.canManageMinistry(it.ministryId) }
         .filter { it.id == initialActivityId || !it.date.isBefore(today.minusDays(7)) }
         .sortedBy(ChurchActivity::date)
     var activityId by rememberSaveable { mutableStateOf(initialActivityId ?: parents.firstOrNull()?.id) }

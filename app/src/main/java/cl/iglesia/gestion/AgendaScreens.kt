@@ -522,7 +522,7 @@ fun ActivityDetailSheet(
                 DetailRow(
                     Icons.Outlined.Schedule,
                     when {
-                        !item.isTask -> "${item.date.longLabel()} · ${item.time}–${item.endTime}"
+                        !item.isTask -> "${item.date.longLabel()} · ${item.time}" + if (item.endTime.isNotBlank()) "–${item.endTime}" else ""
                         item.dueAt != null -> "Fecha límite: ${item.date.longLabel()} · ${item.time}"
                         else -> "Sin fecha límite (actividad: ${item.date.shortLabel()})"
                     },
@@ -552,7 +552,7 @@ fun ActivityDetailSheet(
                 LabeledValue("Director de alabanza", nameOf(item.worshipLeaderId) ?: "Sin asignar")
             }
             val people = item.assigneeIds.mapNotNull { id -> members.find { it.id == id } }
-            val canEditAssignees = canManage && !item.isMeeting && !item.isLegacyTask
+            val canEditAssignees = canManage && !item.isMeeting
             if (item.assigneeIds.isNotEmpty() || canEditAssignees) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -622,7 +622,7 @@ fun ActivityDetailSheet(
                 RepertoireList(worshipSet, songs, members, onOpenFile)
             }
 
-            if (item.kind == ItemKind.Activity && !item.isLegacyTask) {
+            if (item.kind == ItemKind.Activity) {
                 HorizontalDivider(color = CardBorder)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.TaskAlt, contentDescription = null, tint = BrandLight)

@@ -94,11 +94,10 @@ data class ChurchActivity(
     val priority: String? = null,
     val comments: String = "",
     val dueAt: OffsetDateTime? = null,
-    val isLegacyTask: Boolean = false,
 ) {
     val isTask: Boolean get() = kind == ItemKind.Task
     val isMeeting: Boolean get() = kind == ItemKind.Meeting
-    val isDone: Boolean get() = status == "completed" || status == "cancelled"
+    val isDone: Boolean get() = status == "completed"
 
     /** Etiqueta usada en los filtros de tipo de la agenda. */
     val typeLabel: String

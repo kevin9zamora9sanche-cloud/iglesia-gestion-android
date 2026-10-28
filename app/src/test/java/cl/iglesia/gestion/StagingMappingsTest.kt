@@ -63,7 +63,7 @@ class StagingMappingsTest {
     @Test fun classification() {
         assertEquals("MINISTERIAL", StagingMappings.classificationToStaging(Classification.Ministry))
         assertEquals("PROYECTO", StagingMappings.classificationToStaging(Classification.Project))
-        assertEquals("PROYECTO", StagingMappings.classificationToStaging(Classification.General))
+        assertEquals("INDIVIDUAL", StagingMappings.classificationToStaging(Classification.General))
         assertEquals("INDIVIDUAL", StagingMappings.classificationToStaging(Classification.Individual))
         assertEquals(Classification.Ministry, StagingMappings.classificationFromStaging("MINISTERIAL"))
         assertEquals(Classification.Project, StagingMappings.classificationFromStaging("PROYECTO"))

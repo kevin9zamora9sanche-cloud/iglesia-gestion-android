@@ -56,6 +56,7 @@ object SupabaseBackend {
     }
 
     private const val PROJECT_DESCRIPTION_MAX = 2000
+    private const val MAX_RESPONSIBLE_LOOKUPS = 30
     private const val RECORDS_BUCKET = "meeting-records"
     private const val SONGS_BUCKET = "worship-songs"
 
@@ -150,28 +151,33 @@ object SupabaseBackend {
         val (ministries, inactiveAll) = allMinistries.partition(Ministry::active)
         val inactiveMinistries = if (currentMember.isPastor) inactiveAll else emptyList()
 
-        val activities = client.from("activities")
+        val zone = ZoneId.systemDefault()
+        val actividadRows = client.from("actividad")
             .select()
-            .decodeList<SupabaseActivity>()
-        val tasks = client.from("tasks")
+            .decodeList<ActividadRow>()
+        val responsablesByActivity = client.from("actividad_responsable")
             .select()
-            .decodeList<SupabaseTask>()
-        // RLS devuelve las asignaciones propias y las de actividades que el usuario administra.
-        val assignmentsByActivity = client.from("activity_assignments")
+            .decodeList<ActividadResponsableRow>()
+            .groupBy(ActividadResponsableRow::actividadId)
+            .mapValues { (_, rows) -> rows.map(ActividadResponsableRow::usuarioId) }
+        val cultoByActivity = client.from("detalle_culto")
             .select()
-            .decodeList<SupabaseActivityAssignment>()
-            .groupBy(SupabaseActivityAssignment::activityId)
-            .mapValues { (_, rows) -> rows.map(SupabaseActivityAssignment::userId) }
+            .decodeList<DetalleCultoRow>()
+            .associateBy(DetalleCultoRow::actividadId)
+        val targetsByActivity = client.from("convocatoria")
+            .select()
+            .decodeList<ConvocatoriaRow>()
+            .groupBy(ConvocatoriaRow::actividadId)
+            .mapValues { (_, rows) ->
+                rows.map { StagingActivities.Target(it.alcance, it.ministerioId, it.usuarioId) }
+            }
 
-        val progressActivities = client.from("actividad")
-            .select()
-            .decodeList<ProgressActividadRow>()
         val progressTasks = client.from("tarea")
             .select()
             .decodeList<ProgressTareaRow>()
             .groupBy(ProgressTareaRow::actividadId)
         // El avance se calcula aquí con lo visible por RLS (staging no guarda una columna de avance).
-        val progressByProject = progressActivities
+        val progressByProject = actividadRows
             .filter { it.proyectoId != null }
             .groupBy { it.proyectoId!! }
             .mapValues { (_, rows) ->
@@ -205,57 +211,71 @@ object SupabaseBackend {
                 )
             }
 
-        val churchActivities = activities.map { activity ->
-            val assigneeIds = assignmentsByActivity[activity.id].orEmpty()
-            activity.toChurchActivity(
-                assigneeIds = assigneeIds,
-                isAssignedToCurrentUser = currentMember.id in assigneeIds,
-            )
-        }
-        val activityById = activities.associateBy(SupabaseActivity::id)
-        // Una tarea cuyo padre no es visible por RLS se omite en vez de invalidar toda la carga.
-        val churchTasks = tasks.mapNotNull { task ->
-            val parentActivity = activityById[task.activityId] ?: return@mapNotNull null
-            val dueAt = task.dueAt?.let(::parseTimestamp)
-            val localDue = dueAt?.atZoneSameInstant(ZoneId.systemDefault())
+        val churchActivities = actividadRows.mapNotNull { row ->
+            val inicio = parseTimestamp(row.inicio) ?: return@mapNotNull null
+            val isMeeting = row.tipo == "REUNION_LIDERES"
+            val responsables = responsablesByActivity[row.id].orEmpty()
+            val culto = cultoByActivity[row.id]
+            // Una reunión sin filas de convocatoria visibles se convoca al ministerio (si tiene).
+            val targets = targetsByActivity[row.id].orEmpty().ifEmpty {
+                listOfNotNull(row.ministerioId?.let { StagingActivities.Target("MINISTERIO", it, null) })
+            }
+            val ownMinistries = members.firstOrNull { it.id == currentMember.id }?.ministryIds ?: currentMember.ministryIds
             ChurchActivity(
-                id = task.id,
-                title = task.title,
-                description = task.instructions,
-                date = localDue?.toLocalDate() ?: LocalDate.parse(parentActivity.activityDate),
-                time = localDue?.toLocalTime()?.toString()?.take(5) ?: parentActivity.startTime.take(5),
-                endTime = localDue?.toLocalTime()?.toString()?.take(5) ?: parentActivity.endTime.take(5),
-                ministryId = parentActivity.ministryId,
-                location = parentActivity.location,
-                status = task.status,
-                kind = ItemKind.Task,
-                classification = parentActivity.classification(),
-                projectId = parentActivity.projectId,
-                assigneeIds = listOf(task.assigneeId),
-                isAssignedToCurrentUser = task.assigneeId == currentMember.id,
-                parentActivityId = parentActivity.id,
-                parentActivityTitle = parentActivity.title,
-                priority = task.priority,
-                comments = task.comments,
-                dueAt = dueAt,
+                id = row.id,
+                title = row.titulo,
+                description = row.descripcion.orEmpty(),
+                date = StagingActivities.localDate(inicio, zone),
+                time = StagingActivities.timeLabel(inicio, zone),
+                endTime = StagingActivities.timeLabel(row.fin?.let(::parseTimestamp), zone),
+                ministryId = row.ministerioId,
+                location = row.lugar.orEmpty(),
+                status = StagingMappings.statusFromStaging(row.estado),
+                kind = if (isMeeting) ItemKind.Meeting else ItemKind.Activity,
+                category = StagingMappings.activityTypeFromStaging(row.tipo),
+                classification = if (isMeeting && row.ministerioId == null) {
+                    Classification.General
+                } else {
+                    StagingMappings.classificationFromStaging(row.clasificacion)
+                },
+                projectId = row.proyectoId,
+                worshipLeaderId = culto?.directorAlabanzaId,
+                preacherId = culto?.predicadorId,
+                assigneeIds = if (isMeeting) {
+                    targets.mapNotNull { it.userId }
+                } else {
+                    responsables
+                },
+                isAssignedToCurrentUser = if (isMeeting) {
+                    StagingActivities.isConvoked(targets, currentMember.id, ownMinistries)
+                } else {
+                    currentMember.id in responsables
+                },
             )
         }
 
-        val participantsByMeeting = client.from("meeting_participants")
-            .select()
-            .decodeList<SupabaseMeetingParticipant>()
-            .groupBy(SupabaseMeetingParticipant::meetingId)
-            .mapValues { (_, rows) -> rows.map(SupabaseMeetingParticipant::userId) }
-        val meetings = client.from("meetings")
-            .select()
-            .decodeList<SupabaseMeeting>()
-            .map { meeting ->
-                val participants = participantsByMeeting[meeting.id].orEmpty()
-                meeting.toChurchActivity(
-                    participantIds = participants,
-                    isAssignedToCurrentUser = currentMember.id in participants,
-                )
-            }
+        // `usuario` oculta a otras personas a un Líder normal: sus nombres se piden por RPC.
+        val knownIds = members.mapTo(mutableSetOf(), Member::id)
+        val hiddenMembers = if (currentMember.role == Roles.LEADER) {
+            val horizon = LocalDate.now().minusDays(7)
+            churchActivities
+                .filter { it.kind == ItemKind.Activity && !it.date.isBefore(horizon) && it.assigneeIds.any { id -> id !in knownIds } }
+                .take(MAX_RESPONSIBLE_LOOKUPS)
+                .flatMap { activity ->
+                    try {
+                        listResponsibles(activity.id)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        android.util.Log.w("SupabaseBackend", "Responsables no disponibles", error)
+                        emptyList()
+                    }
+                }
+                .distinctBy(Member::id)
+                .filter { it.id !in knownIds }
+        } else {
+            emptyList()
+        }
 
         val worshipMinistryId = ministries.firstOrNull(Ministry::isWorship)?.id
         // Archivos de canciones: requieren la migración 20261023130000; sin ella el
@@ -344,10 +364,10 @@ object SupabaseBackend {
         }
 
         return ChurchSnapshot(
-            members = members,
+            members = members + hiddenMembers,
             ministries = ministries,
             inactiveMinistries = inactiveMinistries,
-            activities = (churchActivities + churchTasks + meetings).sortedWith(
+            activities = churchActivities.sortedWith(
                 compareBy(ChurchActivity::date, ChurchActivity::time),
             ),
             projects = projects,
@@ -543,73 +563,142 @@ object SupabaseBackend {
         require(currentMember.isPastor || currentMember.canManageMinistry(ministryId)) {
             "Solo puedes crear actividades dentro de los ministerios que lideras."
         }
-        val isCulto = draft.category == ActivityTypes.CULTO
-        val activityId = UUID.randomUUID().toString()
-        client.from("activities").insert(
-            ActivityInsert(
-                id = activityId,
-                title = draft.title.trim(),
-                description = draft.description.trim(),
-                activityDate = draft.date.toString(),
-                startTime = draft.startTime.toString(),
-                endTime = draft.endTime.toString(),
-                ministryId = ministryId,
-                activityType = draft.classification.databaseValue,
-                kind = "activity",
-                location = draft.location.trim(),
-                category = draft.category,
-                projectId = projectId,
-                worshipLeaderId = draft.worshipLeaderId.takeIf { isCulto },
-                preacherId = draft.preacherId.takeIf { isCulto },
-                createdBy = currentMember.id,
-            ),
+        val activityId = callCrearActividad(
+            title = draft.title,
+            tipo = StagingMappings.activityTypeToStaging(draft.category),
+            classification = draft.classification,
+            projectId = projectId,
+            ministryId = ministryId,
+            description = draft.description,
+            inicio = StagingActivities.combine(draft.date, draft.startTime, ZoneId.systemDefault()),
+            location = draft.location,
+            responsibles = draft.assigneeIds.distinct(),
         )
-        client.from("activity_assignments").insert(
-            draft.assigneeIds.distinct().map { userId ->
-                ActivityAssignmentInsert(
-                    activityId = activityId,
-                    userId = userId,
-                    assignedBy = currentMember.id,
+        setActivityEnd(activityId, StagingActivities.combine(draft.date, draft.endTime, ZoneId.systemDefault()))
+        // `detalle_culto` solo lo escribe el Pastor (RLS).
+        val culto = StagingActivities.cultoDetail(draft.preacherId, draft.worshipLeaderId)
+        if (draft.category == ActivityTypes.CULTO && currentMember.isPastor && culto != null) {
+            try {
+                client.from("detalle_culto").insert(
+                    DetalleCultoInsert(activityId, culto.preacherId, culto.worshipLeaderId),
                 )
-            },
-        )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                throw PartialSaveException("La actividad se creó, pero no se guardaron el predicador ni el director de alabanza.")
+            }
+        }
     }
 
+    /** Una reunión es una actividad REUNION_LIDERES más filas de `convocatoria`. */
     suspend fun createMeeting(currentMember: Member, draft: MeetingDraft) {
         require(currentMember.isPastor || currentMember.canManageMinistry(draft.ministryId)) {
             "Solo puedes convocar reuniones de los ministerios que lideras."
         }
-        val meetingId = UUID.randomUUID().toString()
-        client.from("meetings").insert(
-            MeetingInsert(
-                id = meetingId,
-                title = draft.title.trim(),
-                purpose = draft.purpose.trim(),
-                meetingDate = draft.date.toString(),
-                startTime = draft.startTime.toString(),
-                endTime = draft.endTime.toString(),
-                location = draft.location.trim(),
-                ministryId = draft.ministryId,
-                createdBy = currentMember.id,
-            ),
+        val zone = ZoneId.systemDefault()
+        val meetingId = callCrearActividad(
+            title = draft.title,
+            tipo = "REUNION_LIDERES",
+            classification = StagingActivities.meetingClassification(draft.ministryId),
+            projectId = null,
+            ministryId = draft.ministryId,
+            description = draft.purpose,
+            inicio = StagingActivities.combine(draft.date, draft.startTime, zone),
+            location = draft.location,
+            responsibles = emptyList(),
         )
-        if (draft.participantIds.isNotEmpty()) {
-            client.from("meeting_participants").insert(
-                draft.participantIds.distinct().map { userId ->
-                    MeetingParticipantInsert(meetingId, userId)
-                },
-            )
+        setActivityEnd(meetingId, StagingActivities.combine(draft.date, draft.endTime, zone))
+        // `convocatoria` solo la escribe el Pastor: la reunión de un líder queda convocada a su ministerio.
+        if (currentMember.isPastor) {
+            try {
+                client.from("convocatoria").insert(
+                    StagingActivities.convocatoriaTargets(draft.ministryId, draft.participantIds).map {
+                        ConvocatoriaInsert(meetingId, it.alcance, it.ministryId, it.userId)
+                    },
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                throw PartialSaveException("La reunión se creó, pero no se pudo guardar la convocatoria.")
+            }
         }
     }
 
+    private suspend fun callCrearActividad(
+        title: String,
+        tipo: String,
+        classification: Classification,
+        projectId: String?,
+        ministryId: String?,
+        description: String,
+        inicio: OffsetDateTime,
+        location: String,
+        responsibles: List<String>,
+    ): String = client.postgrest.rpc(
+        function = "crear_actividad",
+        parameters = buildJsonObject {
+            put("p_titulo", title.trim())
+            put("p_tipo", tipo)
+            put("p_clasificacion", StagingMappings.classificationToStaging(classification))
+            put("p_proyecto_id", projectId)
+            put("p_ministerio_id", ministryId)
+            put("p_descripcion", description.trim())
+            put("p_inicio", inicio.toString())
+            put("p_lugar", location.trim())
+            put("p_estado", "POR_HACER")
+            putJsonArray("p_responsables") { responsibles.forEach { add(it) } }
+        },
+    ).decodeAs<String>()
+
+    /** `crear_actividad` no recibe la hora de término: se guarda con un UPDATE posterior. */
+    private suspend fun setActivityEnd(activityId: String, end: OffsetDateTime) {
+        try {
+            val updated = client.from("actividad").update(ActividadFinUpdate(end.toString())) {
+                select()
+                filter { eq("id", activityId) }
+            }.decodeList<ActividadEstadoRow>()
+            if (updated.isEmpty()) throw IllegalStateException("fin no actualizado")
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            throw PartialSaveException("Se creó, pero no se pudo guardar la hora de término.")
+        }
+    }
+
+    /** Nombres de los responsables vía RPC (usuario oculta a otras personas a un Líder normal). */
+    suspend fun listResponsibles(activityId: String): List<Member> =
+        client.postgrest.rpc(
+            function = "listar_responsables_actividad",
+            parameters = buildJsonObject { put("p_actividad_id", activityId) },
+        ).decodeList<ResponsableNombreRow>().map { row ->
+            val name = StagingMappings.joinFullName(row.nombres, row.apellidos).ifBlank { "Usuario" }
+            Member(
+                id = row.usuarioId,
+                name = name,
+                role = Roles.LEADER,
+                initials = name.initials(),
+                email = "",
+                // Solo para mostrar el nombre: nunca aparece como persona elegible.
+                active = false,
+            )
+        }
+
     suspend fun updateActivityStatus(activityId: String, status: String) {
         require(status in WORK_STATUSES) { "El estado seleccionado no es válido." }
-        client.from("activities").update(ActivityStatusUpdate(status.toEventStatus())) {
-            filter {
-                eq("id", activityId)
-                eq("kind", "activity")
-            }
+        val updated = try {
+            client.from("actividad").update(ActividadEstadoUpdate(StagingMappings.statusToStaging(status))) {
+                select()
+                filter { eq("id", activityId) }
+            }.decodeList<ActividadEstadoRow>()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            throw UserFacingException(
+                "No se pudo cambiar el estado. Reabrir una actividad completada solo lo hace el Pastor o el líder del ministerio.",
+            )
         }
+        // RLS afecta 0 filas sin error cuando no hay permiso.
+        if (updated.isEmpty()) throw UserFacingException("No tienes permiso para cambiar el estado de esta actividad.")
     }
 
     suspend fun createTask(currentMember: Member, draft: TaskDraft) {
@@ -637,16 +726,6 @@ object SupabaseBackend {
         client.from("tasks").update(TaskStatusUpdate(status)) {
             filter {
                 eq("id", taskId)
-            }
-        }
-    }
-
-    suspend fun updateLegacyTaskStatus(activityId: String, status: String) {
-        require(status in WORK_STATUSES) { "El estado seleccionado no es válido." }
-        client.from("activities").update(LegacyTaskStatusUpdate(status)) {
-            filter {
-                eq("id", activityId)
-                eq("kind", "task")
             }
         }
     }
@@ -849,15 +928,15 @@ object SupabaseBackend {
         val toAdd = desiredIds - current
         val toRemove = current - desiredIds
         if (toAdd.isNotEmpty()) {
-            client.from("activity_assignments").insert(
-                toAdd.map { ActivityAssignmentInsert(activity.id, it, currentMember.id) },
+            client.from("actividad_responsable").insert(
+                toAdd.map { ActividadResponsableInsert(activity.id, it) },
             )
         }
         toRemove.forEach { userId ->
-            client.from("activity_assignments").delete {
+            client.from("actividad_responsable").delete {
                 filter {
-                    eq("activity_id", activity.id)
-                    eq("user_id", userId)
+                    eq("actividad_id", activity.id)
+                    eq("usuario_id", userId)
                 }
             }
         }
@@ -1022,61 +1101,6 @@ private fun String.ministryIcon(): String = when {
 }
 
 /** La base guarda "scheduled" como estado inicial de actividades y reuniones. */
-private fun String.toEventStatus(): String = if (this == "pending") "scheduled" else this
-
-private fun String.fromEventStatus(): String = if (this == "scheduled") "pending" else this
-
-private fun SupabaseActivity.classification(): Classification = when {
-    activityType == "personal" -> Classification.Individual
-    activityType == "ministry" -> Classification.Ministry
-    projectId != null -> Classification.Project
-    else -> Classification.General
-}
-
-private fun SupabaseActivity.toChurchActivity(
-    assigneeIds: List<String>,
-    isAssignedToCurrentUser: Boolean,
-) = ChurchActivity(
-    id = id,
-    title = title,
-    description = description,
-    date = LocalDate.parse(activityDate),
-    time = startTime.take(5),
-    endTime = endTime.take(5),
-    ministryId = ministryId,
-    location = location,
-    status = if (kind == "task") taskStatus ?: "pending" else status.fromEventStatus(),
-    kind = if (kind == "task") ItemKind.Task else ItemKind.Activity,
-    category = category,
-    classification = classification(),
-    projectId = projectId,
-    worshipLeaderId = worshipLeaderId,
-    preacherId = preacherId,
-    assigneeIds = assigneeIds,
-    isAssignedToCurrentUser = isAssignedToCurrentUser,
-    priority = priority,
-    isLegacyTask = kind == "task",
-)
-
-private fun SupabaseMeeting.toChurchActivity(
-    participantIds: List<String>,
-    isAssignedToCurrentUser: Boolean,
-) = ChurchActivity(
-    id = id,
-    title = title,
-    description = purpose,
-    date = LocalDate.parse(meetingDate),
-    time = startTime.take(5),
-    endTime = endTime.take(5),
-    ministryId = ministryId,
-    location = location,
-    status = status.fromEventStatus(),
-    kind = ItemKind.Meeting,
-    classification = if (ministryId != null) Classification.Ministry else Classification.General,
-    assigneeIds = participantIds,
-    isAssignedToCurrentUser = isAssignedToCurrentUser,
-)
-
 private fun String.isPublicClientKey(): Boolean {
     if (startsWith("sb_publishable_")) return true
     if (isBlank() || startsWith("sb_secret_")) return false
@@ -1098,62 +1122,46 @@ private data class TaskAssigneeUpdate(
 )
 
 @Serializable
-private data class SupabaseActivity(
+private data class ActividadRow(
     val id: String,
-    val title: String,
-    val description: String,
-    @SerialName("activity_date") val activityDate: String,
-    @SerialName("start_time") val startTime: String,
-    @SerialName("end_time") val endTime: String,
-    @SerialName("ministry_id") val ministryId: String? = null,
-    @SerialName("activity_type") val activityType: String = "general",
-    val location: String,
-    val status: String,
-    val kind: String,
-    val category: String = "",
-    val priority: String? = null,
-    @SerialName("project_id") val projectId: String? = null,
-    @SerialName("worship_leader_id") val worshipLeaderId: String? = null,
-    @SerialName("preacher_id") val preacherId: String? = null,
-    @SerialName("task_status") val taskStatus: String? = null,
+    val titulo: String,
+    val tipo: String? = null,
+    val clasificacion: String? = null,
+    @SerialName("proyecto_id") val proyectoId: String? = null,
+    @SerialName("ministerio_id") val ministerioId: String? = null,
+    val descripcion: String? = null,
+    val inicio: String,
+    val fin: String? = null,
+    val lugar: String? = null,
+    val estado: String? = null,
 )
 
 @Serializable
-private data class SupabaseTask(
-    val id: String,
-    @SerialName("activity_id") val activityId: String,
-    val title: String,
-    val instructions: String,
-    @SerialName("assignee_id") val assigneeId: String,
-    @SerialName("due_at") val dueAt: String? = null,
-    val priority: String,
-    val status: String,
-    val comments: String = "",
+private data class ActividadResponsableRow(
+    @SerialName("actividad_id") val actividadId: String,
+    @SerialName("usuario_id") val usuarioId: String,
 )
 
 @Serializable
-private data class SupabaseActivityAssignment(
-    @SerialName("activity_id") val activityId: String,
-    @SerialName("user_id") val userId: String,
+private data class DetalleCultoRow(
+    @SerialName("actividad_id") val actividadId: String,
+    @SerialName("predicador_id") val predicadorId: String? = null,
+    @SerialName("director_alabanza_id") val directorAlabanzaId: String? = null,
 )
 
 @Serializable
-private data class SupabaseMeeting(
-    val id: String,
-    val title: String,
-    val purpose: String,
-    @SerialName("meeting_date") val meetingDate: String,
-    @SerialName("start_time") val startTime: String,
-    @SerialName("end_time") val endTime: String,
-    @SerialName("ministry_id") val ministryId: String? = null,
-    val location: String,
-    val status: String,
+private data class ConvocatoriaRow(
+    @SerialName("actividad_id") val actividadId: String,
+    val alcance: String,
+    @SerialName("ministerio_id") val ministerioId: String? = null,
+    @SerialName("usuario_id") val usuarioId: String? = null,
 )
 
 @Serializable
-private data class SupabaseMeetingParticipant(
-    @SerialName("meeting_id") val meetingId: String,
-    @SerialName("user_id") val userId: String,
+private data class ResponsableNombreRow(
+    @SerialName("usuario_id") val usuarioId: String,
+    val nombres: String? = null,
+    val apellidos: String? = null,
 )
 
 @Serializable
@@ -1235,74 +1243,44 @@ private data class ProyectoUpdate(
 )
 
 @Serializable
-private data class ProgressActividadRow(
-    val id: String,
-    @SerialName("proyecto_id") val proyectoId: String? = null,
-    val estado: String? = null,
-)
-
-@Serializable
 private data class ProgressTareaRow(
     @SerialName("actividad_id") val actividadId: String,
     val estado: String? = null,
 )
 
 @Serializable
-private data class ActivityInsert(
-    val id: String,
-    val title: String,
-    val description: String,
-    @SerialName("activity_date") val activityDate: String,
-    @SerialName("start_time") val startTime: String,
-    @SerialName("end_time") val endTime: String,
-    @SerialName("ministry_id") val ministryId: String?,
-    @SerialName("activity_type") val activityType: String,
-    val kind: String,
-    val location: String,
-    val category: String,
-    @SerialName("project_id") val projectId: String?,
-    @SerialName("worship_leader_id") val worshipLeaderId: String?,
-    @SerialName("preacher_id") val preacherId: String?,
-    @SerialName("created_by") val createdBy: String,
+private data class ActividadEstadoUpdate(val estado: String)
+
+@Serializable
+private data class ActividadFinUpdate(val fin: String)
+
+@Serializable
+private data class ActividadEstadoRow(val id: String)
+
+@Serializable
+private data class ActividadResponsableInsert(
+    @SerialName("actividad_id") val actividadId: String,
+    @SerialName("usuario_id") val usuarioId: String,
 )
 
 @Serializable
-private data class ActivityStatusUpdate(val status: String)
-
-@Serializable
-private data class ActivityAssignmentInsert(
-    @SerialName("activity_id") val activityId: String,
-    @SerialName("user_id") val userId: String,
-    @SerialName("assigned_by") val assignedBy: String,
+private data class DetalleCultoInsert(
+    @SerialName("actividad_id") val actividadId: String,
+    @SerialName("predicador_id") val predicadorId: String?,
+    @SerialName("director_alabanza_id") val directorAlabanzaId: String?,
 )
 
 @Serializable
-private data class MeetingInsert(
-    val id: String,
-    val title: String,
-    val purpose: String,
-    @SerialName("meeting_date") val meetingDate: String,
-    @SerialName("start_time") val startTime: String,
-    @SerialName("end_time") val endTime: String,
-    val location: String,
-    @SerialName("ministry_id") val ministryId: String?,
-    @SerialName("created_by") val createdBy: String,
-)
-
-@Serializable
-private data class MeetingParticipantInsert(
-    @SerialName("meeting_id") val meetingId: String,
-    @SerialName("user_id") val userId: String,
+private data class ConvocatoriaInsert(
+    @SerialName("actividad_id") val actividadId: String,
+    val alcance: String,
+    @SerialName("ministerio_id") val ministerioId: String?,
+    @SerialName("usuario_id") val usuarioId: String?,
 )
 
 @Serializable
 private data class TaskStatusUpdate(
     val status: String,
-)
-
-@Serializable
-private data class LegacyTaskStatusUpdate(
-    @SerialName("task_status") val taskStatus: String,
 )
 
 @Serializable

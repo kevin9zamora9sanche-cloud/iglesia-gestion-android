@@ -723,7 +723,6 @@ private fun ChurchApp() {
                         onChangeStatus = { status ->
                             perform("Estado actualizado", closeForm = false) {
                                 when {
-                                    item.isLegacyTask -> SupabaseBackend.updateLegacyTaskStatus(item.id, status)
                                     item.isTask -> SupabaseBackend.updateTaskStatus(item.id, status)
                                     else -> SupabaseBackend.updateActivityStatus(item.id, status)
                                 }
