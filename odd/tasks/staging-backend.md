@@ -62,6 +62,7 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
 ## Route log
 - T1+T2: delegated direct (writer trigger: 2+ non-trivial files).
 - T3+T4: delegated direct (writer trigger: 5 non-trivial files).
+- T5-T7: delegated direct (writer trigger: 8+ non-trivial files).
 
 ## Tasks
 - [x] T1 Config and cleanup: staging URL/key in `supabase.properties`, remove
@@ -76,10 +77,10 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
 - [x] T4 Ministries, members and user admin: `ministerio`, `miembro_ministerio`,
   `set_usuario_ministerios`, `create-user` contract (temporary password shown
   once), `usuario` updates; drop icon/color/last sign-in/admin password.
-- [ ] T5 Projects: `proyecto` mapping, required fields, computed progress.
-- [ ] T6 Activities and agenda: `crear_actividad`, `listar_responsables_actividad`,
+- [x] T5 Projects: `proyecto` mapping, required fields, computed progress.
+- [x] T6 Activities and agenda: `crear_actividad`, `listar_responsables_actividad`,
   status updates, `detalle_culto`, meetings as `REUNION_LIDERES` + `convocatoria`.
-- [ ] T7 Tasks and comments: `tarea` tied to `actividad`, `comentario_tarea`, RPC edit/delete.
+- [x] T7 Tasks and comments: `tarea` tied to `actividad`, `comentario_tarea`, RPC edit/delete.
 - [ ] T8 Meeting records and files: `reunion`, `visibilidad_reunion`, `archivo` in bucket `archivos`.
 - [ ] T9 Worship: `cancion`, song files, `repertorio`/`repertorio_cancion`.
 - [ ] T10 Notifications: `notificacion` read/mark read; remove client-side inserts.
@@ -106,7 +107,15 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
   `set_usuario_ministerios` keeps `es_lider` on kept rows (definition read on staging).
   create-user temporary password shown once; role/phone/leader applied as a second step.
   Removed last sign-in, admin set-password, `admin-users` client.
-- Known runtime gap until T5-T10: `loadChurchSnapshot` still reads old tables.
+- T5 done: 0590806 (RED: unresolved `ProjectProgress`; GREEN: 4 tests). Client-side progress.
+- T6 done: 81d637e (RED: unresolved `StagingActivities`; GREEN: 8+15 tests).
+  `crear_actividad` does not set `fin` (follow-up UPDATE). `p_alcance` = ESTA | SIGUIENTES.
+  Classification `General` -> INDIVIDUAL (PROYECTO requires proyecto_id by check).
+  Meetings = REUNION_LIDERES + `convocatoria` (pastor only); a ministry leader's
+  meeting is MINISTERIAL without convocatoria rows.
+- T7 done: 532ad71 (RED: unresolved `StagingTasks`; GREEN: 37 tests total, `assembleDebug` OK).
+  Comments in `comentario_tarea`. Edit/delete RPCs not wired (no UI for them).
+- Known runtime gap until T8-T10: snapshot still reads worship, meeting record and notification tables.
 
 ## Next step
-T5-T7 (projects, activities/agenda, tasks).
+T8-T10 (meeting records/files, worship, notifications).
