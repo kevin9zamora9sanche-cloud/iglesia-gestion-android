@@ -61,6 +61,7 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
 
 ## Route log
 - T1+T2: delegated direct (writer trigger: 2+ non-trivial files).
+- T3+T4: delegated direct (writer trigger: 5 non-trivial files).
 
 ## Tasks
 - [x] T1 Config and cleanup: staging URL/key in `supabase.properties`, remove
@@ -69,10 +70,10 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
   to point at CMAA for schema. Add `.mcp.json` (staging only).
 - [x] T2 Mapping foundation: JUnit setup + pure mappers (roles, status, activity
   type, classification, priority, visibility scope, file type, storage path) with tests.
-- [ ] T3 Auth and profile: `usuario` profile load, `estado` check, leader
+- [x] T3 Auth and profile: `usuario` profile load, `estado` check, leader
   detection via `miembro_ministerio.es_lider`, forced password change when
   `debe_cambiar_contrasena`.
-- [ ] T4 Ministries, members and user admin: `ministerio`, `miembro_ministerio`,
+- [x] T4 Ministries, members and user admin: `ministerio`, `miembro_ministerio`,
   `set_usuario_ministerios`, `create-user` contract (temporary password shown
   once), `usuario` updates; drop icon/color/last sign-in/admin password.
 - [ ] T5 Projects: `proyecto` mapping, required fields, computed progress.
@@ -99,5 +100,13 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
   unknown role -> LIDER_NORMAL, unknown visibility -> Selected, unknown type -> LIBRE.
   Mappers take app internal values, not DB strings.
 
+- T3 done: 9284edc (RED: unresolved `StagingAccounts`; GREEN: 5+15 tests, `assembleDebug` OK).
+  Inactive users are signed out; forced `ChangePasswordForm` when `debe_cambiar_contrasena`.
+- T4 done: 876f3af (5+15 tests, `assembleDebug` OK; compile-only for network/UI).
+  `set_usuario_ministerios` keeps `es_lider` on kept rows (definition read on staging).
+  create-user temporary password shown once; role/phone/leader applied as a second step.
+  Removed last sign-in, admin set-password, `admin-users` client.
+- Known runtime gap until T5-T10: `loadChurchSnapshot` still reads old tables.
+
 ## Next step
-T3 Auth and profile.
+T5-T7 (projects, activities/agenda, tasks).
