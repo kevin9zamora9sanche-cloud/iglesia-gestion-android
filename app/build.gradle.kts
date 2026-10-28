@@ -100,5 +100,7 @@ dependencies {
     implementation("io.ktor:ktor-client-android:2.3.12")
     implementation(files("libs/json-20230227.jar"))
 
+    testImplementation("junit:junit:4.13.2")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
