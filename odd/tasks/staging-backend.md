@@ -63,6 +63,8 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
 - T1+T2: delegated direct (writer trigger: 2+ non-trivial files).
 - T3+T4: delegated direct (writer trigger: 5 non-trivial files).
 - T5-T7: delegated direct (writer trigger: 8+ non-trivial files).
+- T8-T10: delegated direct (writer trigger: 8+ non-trivial files).
+- T11: direct inline (grep, spot check and this document only).
 
 ## Tasks
 - [x] T1 Config and cleanup: staging URL/key in `supabase.properties`, remove
@@ -81,10 +83,10 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
 - [x] T6 Activities and agenda: `crear_actividad`, `listar_responsables_actividad`,
   status updates, `detalle_culto`, meetings as `REUNION_LIDERES` + `convocatoria`.
 - [x] T7 Tasks and comments: `tarea` tied to `actividad`, `comentario_tarea`, RPC edit/delete.
-- [ ] T8 Meeting records and files: `reunion`, `visibilidad_reunion`, `archivo` in bucket `archivos`.
-- [ ] T9 Worship: `cancion`, song files, `repertorio`/`repertorio_cancion`.
-- [ ] T10 Notifications: `notificacion` read/mark read; remove client-side inserts.
-- [ ] T11 Final cleanup and full build; manual check plan against staging.
+- [x] T8 Meeting records and files: `reunion`, `visibilidad_reunion`, `archivo` in bucket `archivos`.
+- [x] T9 Worship: `cancion`, song files, `repertorio`/`repertorio_cancion`.
+- [x] T10 Notifications: `notificacion` read/mark read; remove client-side inserts.
+- [x] T11 Final cleanup and full build; manual check plan against staging.
 
 ## Acceptance criteria
 - No reference to `sbvgcnahuunjnczecmpt` or old tables/RPCs/functions remains.
@@ -115,7 +117,32 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
   meeting is MINISTERIAL without convocatoria rows.
 - T7 done: 532ad71 (RED: unresolved `StagingTasks`; GREEN: 37 tests total, `assembleDebug` OK).
   Comments in `comentario_tarea`. Edit/delete RPCs not wired (no UI for them).
-- Known runtime gap until T8-T10: snapshot still reads worship, meeting record and notification tables.
+- T8 done: c748aab (RED: unresolved `StagingFiles`; GREEN: 54 tests). Shared
+  `uploadArchivo`/`deleteArchivo`; path `<owner>/<id>/<8-char uuid>_<name>`.
+  Meeting records are pastor-only writes; no edit UI, so visibility is create-only.
+- T9 done: a401467 (RED: unresolved `StagingWorship`; GREEN: 59 tests). Song delete
+  cascades (FKs read on staging). One shared repertoire: newest `repertorio` row
+  (on staging the newest, 88542859..., is empty; 399bb51c... holds 2 songs).
+  Save = delete + insert of `repertorio_cancion` with restore on failure. `ensayo_cancion` not wired.
+- T10 done: 84d4e98 (RED: unresolved `NotificationKind`; GREEN: 64 tests). No client-side
+  inserts existed. Tapping actividad/tarea notifications opens the agenda item.
+- T11 done: grep over the repo (excluding this doc) finds no old project id, tables,
+  RPCs, functions or buckets. Parent spot check
+  `gradlew --no-daemon --max-workers=1 testDebugUnitTest`: exit 0, 64 tests, 0 failures.
+
+## Pending checks (manual, against staging, not yet run)
+Use one account per role (PASTOR_ADMIN, LIDER_MINISTERIO, LIDER_NORMAL):
+1. Login, inactive account sign-out, first-login forced password change.
+2. Pastor: create user via create-user (temporary password shown once), edit role/phone/leader,
+   deactivate/reactivate user, create/deactivate ministry.
+3. Projects: pastor create/edit; non-pastor read-only; progress values.
+4. Activities: create with responsables (notification arrives), status change, reopen rule,
+   culto details (pastor), meeting with convocatoria.
+5. Tasks: create under an activity, reassign, comments.
+6. Meeting records: pastor create with PDF/JPG/PNG upload, visibility per scope, delete.
+7. Worship: song CRUD with file, repertoire save/reorder.
+8. Notifications: list, mark one, mark all.
 
 ## Next step
-T8-T10 (meeting records/files, worship, notifications).
+Run the manual checks above, then open the final PR from `feat/staging-backend` to `main`
+(user decision).
