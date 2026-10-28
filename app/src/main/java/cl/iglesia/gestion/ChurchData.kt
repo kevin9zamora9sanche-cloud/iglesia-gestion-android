@@ -92,7 +92,7 @@ data class ChurchActivity(
     val parentActivityId: String? = null,
     val parentActivityTitle: String? = null,
     val priority: String? = null,
-    val comments: String = "",
+    val taskComments: List<TaskComment> = emptyList(),
     val dueAt: OffsetDateTime? = null,
 ) {
     val isTask: Boolean get() = kind == ItemKind.Task
@@ -116,6 +116,14 @@ data class ChurchActivity(
 
     fun isOverdue(today: LocalDate = LocalDate.now()): Boolean = !isDone && date.isBefore(today)
 }
+
+/** Fila de `comentario_tarea`; [authorId] es nulo si el autor ya no existe. */
+data class TaskComment(
+    val id: String,
+    val authorId: String?,
+    val text: String,
+    val createdAt: OffsetDateTime?,
+)
 
 data class ChurchProject(
     val id: String,

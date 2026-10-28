@@ -720,6 +720,11 @@ private fun ChurchApp() {
                             openFormRequest(FormRequest.EditAssignees(item.id))
                         },
                         onOpenFile = ::openFile,
+                        onAddComment = { text ->
+                            perform("Comentario agregado", closeForm = false) {
+                                SupabaseBackend.addTaskComment(member, item.id, text)
+                            }
+                        },
                         onChangeStatus = { status ->
                             perform("Estado actualizado", closeForm = false) {
                                 when {

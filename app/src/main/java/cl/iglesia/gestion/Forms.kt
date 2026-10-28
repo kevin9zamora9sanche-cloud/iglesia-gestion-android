@@ -477,7 +477,7 @@ fun TaskForm(
             TimeField("Hora límite", dueTime, { dueTime = it })
             Text("La tarea aparecerá en el calendario personal del responsable.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
         }
-        TextInput(comments, { comments = it }, "Comentarios (opcional)", singleLine = false, minLines = 2)
+        TextInput(comments, { comments = it }, "Comentario inicial (opcional)", singleLine = false, minLines = 2)
     }
 }
 

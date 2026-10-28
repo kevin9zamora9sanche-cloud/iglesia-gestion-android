@@ -486,6 +486,7 @@ fun ActivityDetailSheet(
     onEditAssignees: () -> Unit,
     onChangeStatus: (String) -> Unit,
     onOpenFile: (RecordFile) -> Unit = {},
+    onAddComment: (String) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val ministry = ministries.find { it.id == item.ministryId }
@@ -545,7 +546,6 @@ fun ActivityDetailSheet(
             if (item.isTask) {
                 item.parentActivityTitle?.let { LabeledValue("Actividad", it) }
                 item.priority?.let { LabeledValue("Prioridad", it.toPriorityLabel()) }
-                if (item.comments.isNotBlank()) LabeledValue("Comentarios", item.comments)
             }
             if (isCulto) {
                 LabeledValue("Predicador", nameOf(item.preacherId) ?: "Sin asignar")
@@ -586,6 +586,39 @@ fun ActivityDetailSheet(
                     if (hidden > 0) {
                         Text("y $hidden persona(s) más", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                     }
+                }
+            }
+
+            if (item.isTask) {
+                HorizontalDivider(color = CardBorder)
+                Text("Comentarios (${item.taskComments.size})", style = MaterialTheme.typography.titleSmall)
+                if (item.taskComments.isEmpty()) {
+                    Text("Aún no hay comentarios.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                }
+                item.taskComments.forEach { comment ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        val whenLabel = comment.createdAt
+                            ?.atZoneSameInstant(java.time.ZoneId.systemDefault())
+                            ?.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM HH:mm"))
+                        Text(
+                            listOfNotNull(nameOf(comment.authorId) ?: "Alguien", whenLabel).joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                        )
+                        Text(comment.text, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                var newComment by remember(item.id) { mutableStateOf("") }
+                TextInput(newComment, { newComment = it }, "Escribe un comentario", singleLine = false, minLines = 2)
+                OutlinedButton(
+                    onClick = {
+                        onAddComment(newComment)
+                        newComment = ""
+                    },
+                    enabled = !submitting && StagingTasks.commentOrNull(newComment) != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Comentar")
                 }
             }
 

@@ -172,10 +172,14 @@ object SupabaseBackend {
                 rows.map { StagingActivities.Target(it.alcance, it.ministerioId, it.usuarioId) }
             }
 
-        val progressTasks = client.from("tarea")
+        val tareaRows = client.from("tarea")
             .select()
-            .decodeList<ProgressTareaRow>()
-            .groupBy(ProgressTareaRow::actividadId)
+            .decodeList<TareaRow>()
+        val progressTasks = tareaRows.groupBy(TareaRow::actividadId)
+        val commentsByTask = client.from("comentario_tarea")
+            .select { order("created_at", Order.ASCENDING) }
+            .decodeList<ComentarioTareaRow>()
+            .groupBy(ComentarioTareaRow::tareaId)
         // El avance se calcula aquí con lo visible por RLS (staging no guarda una columna de avance).
         val progressByProject = actividadRows
             .filter { it.proyectoId != null }
@@ -251,6 +255,40 @@ object SupabaseBackend {
                 } else {
                     currentMember.id in responsables
                 },
+            )
+        }
+
+        val activityRowById = actividadRows.associateBy(ActividadRow::id)
+        val activityById = churchActivities.associateBy(ChurchActivity::id)
+        // Una tarea cuya actividad no es visible se omite en vez de invalidar toda la carga.
+        val churchTasks = tareaRows.mapNotNull { task ->
+            val parent = activityById[task.actividadId] ?: return@mapNotNull null
+            val parentStart = activityRowById[task.actividadId]?.inicio?.let(::parseTimestamp)
+                ?: return@mapNotNull null
+            val dueAt = task.fechaLimite?.let(::parseTimestamp)
+            val schedule = StagingTasks.schedule(dueAt, parentStart, zone)
+            ChurchActivity(
+                id = task.id,
+                title = task.titulo,
+                description = task.instrucciones.orEmpty(),
+                date = schedule.date,
+                time = schedule.time,
+                endTime = schedule.time,
+                ministryId = parent.ministryId,
+                location = parent.location,
+                status = StagingMappings.statusFromStaging(task.estado),
+                kind = ItemKind.Task,
+                classification = parent.classification,
+                projectId = parent.projectId,
+                assigneeIds = listOfNotNull(task.responsableId),
+                isAssignedToCurrentUser = task.responsableId == currentMember.id,
+                parentActivityId = parent.id,
+                parentActivityTitle = parent.title,
+                priority = StagingMappings.priorityFromStaging(task.prioridad),
+                taskComments = commentsByTask[task.id].orEmpty().map {
+                    TaskComment(it.id, it.autorId, it.texto, it.createdAt?.let(::parseTimestamp))
+                },
+                dueAt = dueAt,
             )
         }
 
@@ -367,7 +405,7 @@ object SupabaseBackend {
             members = members + hiddenMembers,
             ministries = ministries,
             inactiveMinistries = inactiveMinistries,
-            activities = churchActivities.sortedWith(
+            activities = (churchActivities + churchTasks).sortedWith(
                 compareBy(ChurchActivity::date, ChurchActivity::time),
             ),
             projects = projects,
@@ -705,29 +743,53 @@ object SupabaseBackend {
         require(currentMember.isPastor || currentMember.isMinistryLeader) {
             "Solo el Pastor/Administrador o el Líder de ministerio puede asignar tareas."
         }
-        client.from("tasks").insert(
-            TaskInsert(
-                id = UUID.randomUUID().toString(),
-                activityId = draft.activityId,
-                title = draft.title.trim(),
-                instructions = draft.instructions.trim(),
-                assigneeId = draft.assigneeId,
-                dueAt = draft.dueAt?.toString(),
-                priority = draft.priority,
-                status = "pending",
-                comments = draft.comments.trim(),
-                assignedBy = currentMember.id,
+        val created = client.from("tarea").insert(
+            TareaInsert(
+                actividadId = draft.activityId,
+                titulo = draft.title.trim(),
+                instrucciones = draft.instructions.trim().ifBlank { null },
+                responsableId = draft.assigneeId,
+                fechaLimite = draft.dueAt?.toString(),
+                prioridad = StagingMappings.priorityToStaging(draft.priority),
+                estado = "POR_HACER",
+                createdBy = currentMember.id,
             ),
-        )
+        ) {
+            select()
+        }.decodeSingle<IdRow>()
+        // Los comentarios ahora son filas propias: el texto inicial se guarda como el primero.
+        StagingTasks.commentOrNull(draft.comments)?.let { text ->
+            try {
+                addTaskComment(currentMember, created.id, text)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                throw PartialSaveException("La tarea se creó, pero no se pudo guardar el comentario.")
+            }
+        }
     }
 
     suspend fun updateTaskStatus(taskId: String, status: String) {
         require(status in WORK_STATUSES) { "El estado seleccionado no es válido." }
-        client.from("tasks").update(TaskStatusUpdate(status)) {
-            filter {
-                eq("id", taskId)
-            }
+        val updated = try {
+            client.from("tarea").update(TareaEstadoUpdate(StagingMappings.statusToStaging(status))) {
+                select()
+                filter { eq("id", taskId) }
+            }.decodeList<IdRow>()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            throw UserFacingException(
+                "No se pudo cambiar el estado. Reabrir una tarea completada solo lo hace el Pastor o el líder del ministerio.",
+            )
         }
+        // RLS afecta 0 filas sin error cuando no hay permiso.
+        if (updated.isEmpty()) throw UserFacingException("No tienes permiso para cambiar el estado de esta tarea.")
+    }
+
+    suspend fun addTaskComment(currentMember: Member, taskId: String, text: String) {
+        val clean = requireNotNull(StagingTasks.commentOrNull(text)) { "El comentario no puede estar vacío." }
+        client.from("comentario_tarea").insert(ComentarioTareaInsert(taskId, currentMember.id, clean))
     }
 
     suspend fun markNotificationRead(notificationId: String) {
@@ -943,9 +1005,11 @@ object SupabaseBackend {
     }
 
     suspend fun reassignTask(taskId: String, assigneeId: String) {
-        client.from("tasks").update(TaskAssigneeUpdate(assigneeId)) {
+        val updated = client.from("tarea").update(TareaResponsableUpdate(assigneeId)) {
+            select()
             filter { eq("id", taskId) }
-        }
+        }.decodeList<IdRow>()
+        if (updated.isEmpty()) throw UserFacingException("No tienes permiso para reasignar esta tarea.")
     }
 
     /**
@@ -1117,11 +1181,6 @@ private fun String.isPublicClientKey(): Boolean {
 }
 
 @Serializable
-private data class TaskAssigneeUpdate(
-    @SerialName("assignee_id") val assigneeId: String,
-)
-
-@Serializable
 private data class ActividadRow(
     val id: String,
     val titulo: String,
@@ -1243,12 +1302,6 @@ private data class ProyectoUpdate(
 )
 
 @Serializable
-private data class ProgressTareaRow(
-    @SerialName("actividad_id") val actividadId: String,
-    val estado: String? = null,
-)
-
-@Serializable
 private data class ActividadEstadoUpdate(val estado: String)
 
 @Serializable
@@ -1279,22 +1332,52 @@ private data class ConvocatoriaInsert(
 )
 
 @Serializable
-private data class TaskStatusUpdate(
-    val status: String,
+private data class IdRow(val id: String)
+
+@Serializable
+private data class TareaEstadoUpdate(val estado: String)
+
+@Serializable
+private data class TareaResponsableUpdate(@SerialName("responsable_id") val responsableId: String)
+
+@Serializable
+private data class TareaInsert(
+    @SerialName("actividad_id") val actividadId: String,
+    val titulo: String,
+    val instrucciones: String?,
+    @SerialName("responsable_id") val responsableId: String,
+    @SerialName("fecha_limite") val fechaLimite: String?,
+    val prioridad: String,
+    val estado: String,
+    @SerialName("created_by") val createdBy: String,
 )
 
 @Serializable
-private data class TaskInsert(
+private data class ComentarioTareaInsert(
+    @SerialName("tarea_id") val tareaId: String,
+    @SerialName("autor_id") val autorId: String,
+    val texto: String,
+)
+
+@Serializable
+private data class TareaRow(
     val id: String,
-    @SerialName("activity_id") val activityId: String,
-    val title: String,
-    val instructions: String,
-    @SerialName("assignee_id") val assigneeId: String,
-    @SerialName("due_at") val dueAt: String?,
-    val priority: String,
-    val status: String,
-    val comments: String,
-    @SerialName("assigned_by") val assignedBy: String,
+    @SerialName("actividad_id") val actividadId: String,
+    val titulo: String,
+    val instrucciones: String? = null,
+    @SerialName("responsable_id") val responsableId: String? = null,
+    @SerialName("fecha_limite") val fechaLimite: String? = null,
+    val prioridad: String? = null,
+    val estado: String? = null,
+)
+
+@Serializable
+private data class ComentarioTareaRow(
+    val id: String,
+    @SerialName("tarea_id") val tareaId: String,
+    @SerialName("autor_id") val autorId: String? = null,
+    val texto: String,
+    @SerialName("created_at") val createdAt: String? = null,
 )
 
 @Serializable
