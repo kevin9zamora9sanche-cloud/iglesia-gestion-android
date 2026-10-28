@@ -982,7 +982,7 @@ fun RepertoireForm(
 
     FullScreenForm(
         title = "Repertorio de Alabanza",
-        confirmLabel = "Guardar y notificar",
+        confirmLabel = "Guardar",
         canConfirm = true,
         submitting = submitting,
         error = error,
@@ -990,8 +990,7 @@ fun RepertoireForm(
         onConfirm = { onSubmit(entries.mapIndexed { index, entry -> entry.copy(position = index + 1) }) },
     ) {
         MessageBanner(
-            "Es el repertorio vigente del ministerio y se usa en todos los cultos y ensayos. " +
-                "Al guardar se enviará un único aviso a Alabanza, al Pastor y a predicadores y directores de los próximos cultos.",
+            "Es el repertorio vigente del ministerio y se usa en todos los cultos y ensayos.",
             BannerTone.Info,
         )
         if (entries.isEmpty()) {

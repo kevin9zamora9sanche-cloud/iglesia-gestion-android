@@ -154,22 +154,22 @@ data class WorshipSetSong(
     val position: Int,
     val key: String,
     val leadId: String?,
+    /** `repertorio_cancion.enlace_version`; se conserva al guardar aunque la pantalla no lo edite. */
+    val versionUrl: String = "",
 )
 
 /**
- * Repertorio de Alabanza. El vigente es único y reutilizable (`activityId` nulo);
- * los atados a un Culto son repertorios antiguos que se conservan.
+ * Fila de `repertorio`. En staging no depende de un culto ni de un ministerio: la app usa
+ * el más reciente como repertorio vigente (ver [ministryRepertoire]).
  */
 data class WorshipSet(
     val id: String,
-    val activityId: String?,
-    val directorId: String?,
     val updatedAt: OffsetDateTime?,
     val songs: List<WorshipSetSong>,
 )
 
-/** Repertorio único y reutilizable del ministerio, si ya se creó. */
-fun List<WorshipSet>.ministryRepertoire(): WorshipSet? = firstOrNull { it.activityId == null }
+/** Repertorio vigente: la lista llega ordenada del más reciente al más antiguo. */
+fun List<WorshipSet>.ministryRepertoire(): WorshipSet? = firstOrNull()
 
 /** Visibilidad de un registro de reunión. */
 enum class RecordVisibility(val databaseValue: String, val label: String) {

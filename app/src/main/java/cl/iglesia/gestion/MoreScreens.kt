@@ -347,8 +347,8 @@ fun WorshipScreen(
     deletingSong?.let { song ->
         ConfirmDialog(
             title = "¿Eliminar \"${song.title}\"?",
-            message = "Se quitará del catálogo" +
-                (if (song.files.isEmpty()) "" else " junto con sus ${song.files.size} archivo(s)") +
+            message = "Se quitará del catálogo y del repertorio" +
+                (if (song.files.isEmpty()) "" else ", junto con sus ${song.files.size} archivo(s)") +
                 ". Esta acción no se puede deshacer.",
             confirmLabel = "Eliminar",
             destructive = true,

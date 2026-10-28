@@ -57,7 +57,6 @@ object SupabaseBackend {
 
     private const val PROJECT_DESCRIPTION_MAX = 2000
     private const val MAX_RESPONSIBLE_LOOKUPS = 30
-    private const val SONGS_BUCKET = "worship-songs"
 
     suspend fun loadCurrentMember(): Member {
         val user = client.auth.retrieveUserForCurrentSession()
@@ -314,63 +313,42 @@ object SupabaseBackend {
             emptyList()
         }
 
-        val worshipMinistryId = ministries.firstOrNull(Ministry::isWorship)?.id
-        // Archivos de canciones: requieren la migración 20261023130000; sin ella el
-        // catálogo funciona igual, solo sin archivos.
-        val songFiles = try {
-            client.from("worship_song_files")
-                .select { order("created_at", Order.ASCENDING) }
-                .decodeList<SupabaseSongFile>()
-                .groupBy(SupabaseSongFile::songId)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            android.util.Log.w("SupabaseBackend", "Archivos de canciones no disponibles", error)
-            emptyMap()
-        }
-        val songs = worshipMinistryId?.let { ministryId ->
-            client.from("worship_songs")
-                .select {
-                    filter {
-                        eq("ministry_id", ministryId)
-                    }
-                    order("title", Order.ASCENDING)
-                }
-                .decodeList<SupabaseSong>()
-                .map {
-                    WorshipSong(
-                        id = it.id,
-                        title = it.title,
-                        artist = it.artist,
-                        defaultKey = it.defaultKey,
-                        referenceUrl = it.referenceUrl,
-                        files = songFiles[it.id].orEmpty().map { file ->
-                            RecordFile(file.id, file.fileName, file.contentType, file.sizeBytes, file.objectPath)
-                        },
-                    )
-                }
-        }.orEmpty()
-        val setSongsBySet = client.from("worship_set_songs")
+        val loadedArchivos = loadArchivos()
+        // RLS: solo el Pastor, Alabanza y quienes participan en cultos ven canciones y repertorio.
+        val songFiles = loadedArchivos.filter { it.cancionId != null }.groupBy { it.cancionId }
+        val songs = client.from("cancion")
+            .select { order("titulo", Order.ASCENDING) }
+            .decodeList<CancionRow>()
+            .map {
+                WorshipSong(
+                    id = it.id,
+                    title = it.titulo,
+                    artist = it.artista.orEmpty(),
+                    defaultKey = it.tonalidad.orEmpty(),
+                    referenceUrl = it.enlaceVersion.orEmpty(),
+                    files = songFiles[it.id].orEmpty().map { file -> file.toRecordFile() },
+                )
+            }
+        val entriesByRepertoire = client.from("repertorio_cancion")
             .select()
-            .decodeList<SupabaseWorshipSetSong>()
-            .groupBy(SupabaseWorshipSetSong::setId)
-        val worshipSets = client.from("worship_sets")
-            .select()
-            .decodeList<SupabaseWorshipSet>()
+            .decodeList<RepertorioCancionRow>()
+            .groupBy(RepertorioCancionRow::repertorioId)
+        val worshipSets = client.from("repertorio")
+            .select { order("updated_at", Order.DESCENDING) }
+            .decodeList<RepertorioRow>()
             .map { set ->
                 WorshipSet(
                     id = set.id,
-                    activityId = set.activityId,
-                    directorId = set.directorId,
-                    updatedAt = set.updatedAt?.let(::parseTimestamp),
-                    songs = setSongsBySet[set.id].orEmpty()
-                        .sortedBy(SupabaseWorshipSetSong::position)
+                    updatedAt = parseTimestamp(set.updatedAt),
+                    songs = entriesByRepertoire[set.id].orEmpty()
+                        .sortedBy(RepertorioCancionRow::orden)
                         .map {
                             WorshipSetSong(
-                                songId = it.songId,
-                                position = it.position,
-                                key = it.songKey,
-                                leadId = it.leadId,
+                                songId = it.cancionId,
+                                position = it.orden,
+                                key = it.tonalidad.orEmpty(),
+                                leadId = it.directorId,
+                                versionUrl = it.enlaceVersion.orEmpty(),
                             )
                         },
                 )
@@ -389,8 +367,7 @@ object SupabaseBackend {
                 )
             }
 
-        val archivos = loadArchivos()
-        val meetingRecords = loadMeetingRecords(archivos)
+        val meetingRecords = loadMeetingRecords(loadedArchivos)
 
         return ChurchSnapshot(
             members = members + hiddenMembers,
@@ -862,22 +839,28 @@ object SupabaseBackend {
 
     suspend fun createWorshipSong(
         currentMember: Member,
-        ministryId: String,
         draft: WorshipSongDraft,
         files: List<PickedFile> = emptyList(),
     ) {
         val songId = UUID.randomUUID().toString()
-        client.from("worship_songs").insert(
-            WorshipSongInsert(
-                id = songId,
-                ministryId = ministryId,
-                title = draft.title.trim(),
-                artist = draft.artist.trim(),
-                defaultKey = draft.defaultKey.trim(),
-                referenceUrl = draft.referenceUrl.trim(),
-                createdBy = currentMember.id,
-            ),
-        )
+        val fields = StagingWorship.songFields(draft)
+        try {
+            client.from("cancion").insert(
+                CancionInsert(
+                    id = songId,
+                    titulo = fields.title,
+                    artista = fields.artist,
+                    tonalidad = fields.key,
+                    enlaceVersion = fields.versionUrl,
+                    registradoPor = currentMember.id,
+                ),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudo crear la canción", error)
+            throw UserFacingException("No se pudo guardar la canción. Solo el Pastor o el líder de Alabanza puede agregarlas.")
+        }
         val failed = files.filter { file ->
             try {
                 uploadSongFile(currentMember, songId, file)
@@ -898,94 +881,100 @@ object SupabaseBackend {
     }
 
     suspend fun updateWorshipSong(songId: String, draft: WorshipSongDraft) {
-        client.from("worship_songs").update(
-            WorshipSongUpdate(
-                title = draft.title.trim(),
-                artist = draft.artist.trim(),
-                defaultKey = draft.defaultKey.trim(),
-                referenceUrl = draft.referenceUrl.trim(),
-            ),
-        ) {
-            filter { eq("id", songId) }
-        }
-    }
-
-    /**
-     * Elimina una canción y sus archivos. Una canción usada en algún repertorio no se
-     * puede eliminar (la base lo impide con una clave foránea).
-     */
-    suspend fun deleteWorshipSong(song: WorshipSong, worshipSets: List<WorshipSet>) {
-        if (worshipSets.any { set -> set.songs.any { it.songId == song.id } }) {
-            throw UserFacingException(
-                "\"${song.title}\" está en el repertorio, por lo que no se puede eliminar. " +
-                    "Quítala del repertorio primero o edita sus datos.",
-            )
-        }
-        // Los objetos de Storage se borran antes: su permiso depende de que la canción exista.
-        if (song.files.isNotEmpty()) {
-            client.storage.from(SONGS_BUCKET).delete(song.files.map(RecordFile::objectPath))
-        }
-        client.from("worship_songs").delete {
-            filter { eq("id", song.id) }
-        }
-    }
-
-    suspend fun uploadSongFile(currentMember: Member, songId: String, file: PickedFile) {
-        val extension = ALLOWED_FILE_TYPES[file.contentType]
-            ?: throw UserFacingException("Solo se permiten archivos PDF, JPG o PNG.")
-        if (file.bytes.isEmpty() || file.bytes.size > MAX_FILE_BYTES) {
-            throw UserFacingException("Cada archivo debe pesar como máximo 5 MB.")
-        }
-        val fileId = UUID.randomUUID().toString()
-        val path = "$songId/$fileId.$extension"
-        val bucket = client.storage.from(SONGS_BUCKET)
-        bucket.upload(path, file.bytes, upsert = false)
-        try {
-            client.from("worship_song_files").insert(
-                SongFileInsert(
-                    id = fileId,
-                    songId = songId,
-                    fileName = file.name,
-                    contentType = file.contentType,
-                    sizeBytes = file.bytes.size.toLong(),
-                    objectPath = path,
-                    uploadedBy = currentMember.id,
+        val fields = StagingWorship.songFields(draft)
+        val updated = try {
+            client.from("cancion").update(
+                CancionUpdate(
+                    titulo = fields.title,
+                    artista = fields.artist,
+                    tonalidad = fields.key,
+                    enlaceVersion = fields.versionUrl,
                 ),
-            )
-        } catch (error: Exception) {
-            // Sin fila asociada el objeto quedaría huérfano: se elimina.
-            runCatching { bucket.delete(path) }
+            ) {
+                select()
+                filter { eq("id", songId) }
+            }.decodeList<IdRow>()
+        } catch (error: CancellationException) {
             throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudo actualizar la canción", error)
+            throw UserFacingException("No se pudo guardar la canción.")
         }
-    }
-
-    suspend fun deleteSongFile(file: RecordFile) {
-        client.from("worship_song_files").delete {
-            filter { eq("id", file.id) }
-        }
-        client.storage.from(SONGS_BUCKET).delete(file.objectPath)
+        // RLS afecta 0 filas sin error cuando no hay permiso.
+        if (updated.isEmpty()) throw UserFacingException("No tienes permiso para editar canciones.")
     }
 
     /**
-     * Reemplaza el repertorio único del ministerio en una sola transacción; la base
-     * envía un solo aviso. Requiere la migración 20261023140000.
+     * Elimina una canción y sus archivos. La base elimina en cascada su lugar en los
+     * repertorios (`repertorio_cancion`) y las filas de `archivo`; luego se borran los objetos.
      */
-    suspend fun saveMinistryRepertoire(ministryId: String, songs: List<WorshipSetSong>) {
-        client.postgrest.rpc(
-            function = "save_ministry_repertoire",
-            parameters = buildJsonObject {
-                put("target_ministry_id", ministryId)
-                putJsonArray("target_songs") {
-                    songs.forEach { song ->
-                        addJsonObject {
-                            put("song_id", song.songId)
-                            put("song_key", song.key)
-                            put("lead_id", song.leadId.orEmpty())
-                        }
-                    }
-                }
-            },
-        )
+    suspend fun deleteWorshipSong(song: WorshipSong) {
+        val deleted = try {
+            client.from("cancion").delete {
+                select()
+                filter { eq("id", song.id) }
+            }.decodeList<IdRow>()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudo eliminar la canción", error)
+            throw UserFacingException("No se pudo eliminar la canción.")
+        }
+        if (deleted.isEmpty()) throw UserFacingException("No tienes permiso para eliminar canciones.")
+        removeStorageObjects(song.files.map(RecordFile::objectPath))
+    }
+
+    suspend fun uploadSongFile(currentMember: Member, songId: String, file: PickedFile) =
+        uploadArchivo(currentMember, "cancion", songId, file)
+
+    suspend fun deleteSongFile(file: RecordFile) = deleteArchivo(file)
+
+    /**
+     * Reemplaza las canciones del repertorio vigente (o crea el repertorio si no existe).
+     * No hay RPC: se borran y se vuelven a insertar las filas; si la inserción falla se
+     * restauran las anteriores para no dejar el repertorio vacío.
+     */
+    suspend fun saveRepertoire(currentMember: Member, existing: WorshipSet?, songs: List<WorshipSetSong>) {
+        val repertoireId = existing?.id ?: UUID.randomUUID().toString()
+        val now = OffsetDateTime.now().toString()
+        try {
+            if (existing == null) {
+                client.from("repertorio").insert(RepertorioInsert(repertoireId, currentMember.id, now))
+            } else {
+                val updated = client.from("repertorio").update(RepertorioUpdate(currentMember.id, now)) {
+                    select()
+                    filter { eq("id", repertoireId) }
+                }.decodeList<IdRow>()
+                if (updated.isEmpty()) throw UserFacingException("No tienes permiso para editar el repertorio.")
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: UserFacingException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudo guardar el repertorio", error)
+            throw UserFacingException("No se pudo guardar el repertorio. Solo el Pastor o el líder de Alabanza puede editarlo.")
+        }
+        val rows = StagingWorship.repertoireRows(repertoireId, songs)
+        val previous = StagingWorship.repertoireRows(repertoireId, existing?.songs.orEmpty())
+        client.from("repertorio_cancion").delete {
+            filter { eq("repertorio_id", repertoireId) }
+        }
+        if (rows.isEmpty()) return
+        try {
+            client.from("repertorio_cancion").insert(rows.map { RepertorioCancionInsert(it) })
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudieron guardar las canciones del repertorio", error)
+            val restored = previous.isEmpty() || runCatching {
+                client.from("repertorio_cancion").insert(previous.map { RepertorioCancionInsert(it) })
+            }.isSuccess
+            throw UserFacingException(
+                if (restored) "No se pudo guardar el repertorio; se conservó la versión anterior."
+                else "El repertorio quedó incompleto. Vuelve a guardarlo.",
+            )
+        }
     }
 
     suspend fun createMinistry(currentMember: Member, draft: MinistryDraft) {
@@ -1275,32 +1264,6 @@ private data class ResponsableNombreRow(
 )
 
 @Serializable
-private data class SupabaseSong(
-    val id: String,
-    val title: String,
-    val artist: String,
-    @SerialName("default_key") val defaultKey: String,
-    @SerialName("reference_url") val referenceUrl: String = "",
-)
-
-@Serializable
-private data class SupabaseWorshipSet(
-    val id: String,
-    @SerialName("activity_id") val activityId: String? = null,
-    @SerialName("director_id") val directorId: String? = null,
-    @SerialName("updated_at") val updatedAt: String? = null,
-)
-
-@Serializable
-private data class SupabaseWorshipSetSong(
-    @SerialName("set_id") val setId: String,
-    @SerialName("song_id") val songId: String,
-    val position: Int,
-    @SerialName("song_key") val songKey: String,
-    @SerialName("lead_id") val leadId: String? = null,
-)
-
-@Serializable
 private data class SupabaseNotification(
     val id: String,
     val message: String,
@@ -1435,46 +1398,6 @@ private data class ComentarioTareaRow(
 private data class NotificationReadUpdate(val read: Boolean)
 
 @Serializable
-private data class WorshipSongInsert(
-    val id: String,
-    @SerialName("ministry_id") val ministryId: String,
-    val title: String,
-    val artist: String,
-    @SerialName("default_key") val defaultKey: String,
-    @SerialName("reference_url") val referenceUrl: String,
-    @SerialName("created_by") val createdBy: String,
-)
-
-@Serializable
-private data class WorshipSongUpdate(
-    val title: String,
-    val artist: String,
-    @SerialName("default_key") val defaultKey: String,
-    @SerialName("reference_url") val referenceUrl: String,
-)
-
-@Serializable
-private data class SupabaseSongFile(
-    val id: String,
-    @SerialName("song_id") val songId: String,
-    @SerialName("file_name") val fileName: String,
-    @SerialName("content_type") val contentType: String,
-    @SerialName("size_bytes") val sizeBytes: Long,
-    @SerialName("object_path") val objectPath: String,
-)
-
-@Serializable
-private data class SongFileInsert(
-    val id: String,
-    @SerialName("song_id") val songId: String,
-    @SerialName("file_name") val fileName: String,
-    @SerialName("content_type") val contentType: String,
-    @SerialName("size_bytes") val sizeBytes: Long,
-    @SerialName("object_path") val objectPath: String,
-    @SerialName("uploaded_by") val uploadedBy: String,
-)
-
-@Serializable
 private data class ArchivoRow(
     val id: String,
     val nombre: String,
@@ -1532,6 +1455,75 @@ private data class VisibilidadReunionInsert(
     @SerialName("ministerio_id") val ministerioId: String?,
     @SerialName("usuario_id") val usuarioId: String?,
 )
+
+@Serializable
+private data class CancionRow(
+    val id: String,
+    val titulo: String,
+    val artista: String? = null,
+    val tonalidad: String? = null,
+    @SerialName("enlace_version") val enlaceVersion: String? = null,
+)
+
+@Serializable
+private data class CancionInsert(
+    val id: String,
+    val titulo: String,
+    val artista: String?,
+    val tonalidad: String?,
+    @SerialName("enlace_version") val enlaceVersion: String?,
+    @SerialName("registrado_por") val registradoPor: String,
+)
+
+@Serializable
+private data class CancionUpdate(
+    val titulo: String,
+    val artista: String?,
+    val tonalidad: String?,
+    @SerialName("enlace_version") val enlaceVersion: String?,
+)
+
+@Serializable
+private data class RepertorioRow(
+    val id: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+private data class RepertorioInsert(
+    val id: String,
+    @SerialName("modificado_por") val modificadoPor: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+private data class RepertorioUpdate(
+    @SerialName("modificado_por") val modificadoPor: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+private data class RepertorioCancionRow(
+    @SerialName("repertorio_id") val repertorioId: String,
+    @SerialName("cancion_id") val cancionId: String,
+    val orden: Int,
+    val tonalidad: String? = null,
+    @SerialName("enlace_version") val enlaceVersion: String? = null,
+    @SerialName("director_id") val directorId: String? = null,
+)
+
+@Serializable
+private data class RepertorioCancionInsert(
+    @SerialName("repertorio_id") val repertorioId: String,
+    @SerialName("cancion_id") val cancionId: String,
+    val orden: Int,
+    val tonalidad: String?,
+    @SerialName("enlace_version") val enlaceVersion: String?,
+    @SerialName("director_id") val directorId: String?,
+) {
+    constructor(row: StagingWorship.RepertoireRow) :
+        this(row.repertoireId, row.songId, row.orden, row.key, row.versionUrl, row.leadId)
+}
 
 @Serializable
 private data class UsuarioRow(

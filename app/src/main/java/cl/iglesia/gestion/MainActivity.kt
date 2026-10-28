@@ -626,7 +626,7 @@ private fun ChurchApp() {
                                         onEditSong = { song -> openFormRequest(FormRequest.EditSong(song.id)) },
                                         onDeleteSong = { song ->
                                             perform("\"${song.title}\" se eliminó del catálogo", closeForm = false) {
-                                                SupabaseBackend.deleteWorshipSong(song, snapshot?.worshipSets.orEmpty())
+                                                SupabaseBackend.deleteWorshipSong(song)
                                             }
                                         },
                                     )
@@ -794,9 +794,7 @@ private fun ChurchApp() {
                     error = formError,
                     onDismiss = { openForm = null },
                     onSubmit = { draft, files ->
-                        permissions.worshipMinistryId?.let { ministryId ->
-                            perform("Canción agregada") { SupabaseBackend.createWorshipSong(member, ministryId, draft, files) }
-                        }
+                        perform("Canción agregada") { SupabaseBackend.createWorshipSong(member, draft, files) }
                     },
                 )
                 is FormRequest.EditSong -> {
@@ -968,20 +966,20 @@ private fun ChurchApp() {
                     },
                 )
                 FormRequest.Repertoire -> {
-                    val ministryId = permissions.worshipMinistryId
-                    if (ministryId == null) {
+                    if (!permissions.canManageWorship) {
                         LaunchedEffect(request) { openForm = null }
                     } else {
+                        val repertoire = snapshot?.worshipSets.orEmpty().ministryRepertoire()
                         RepertoireForm(
                             songs = snapshot?.songs.orEmpty(),
                             members = members,
-                            existing = snapshot?.worshipSets.orEmpty().ministryRepertoire(),
+                            existing = repertoire,
                             submitting = submitting,
                             error = formError,
                             onDismiss = { openForm = null },
                             onSubmit = { setSongs ->
-                                perform("Repertorio guardado y notificado") {
-                                    SupabaseBackend.saveMinistryRepertoire(ministryId, setSongs)
+                                perform("Repertorio guardado") {
+                                    SupabaseBackend.saveRepertoire(member, repertoire, setSongs)
                                 }
                             },
                         )

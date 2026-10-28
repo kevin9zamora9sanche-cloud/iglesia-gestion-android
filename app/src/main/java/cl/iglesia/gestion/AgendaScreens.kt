@@ -500,8 +500,8 @@ fun ActivityDetailSheet(
     }
     val childTasks = if (item.kind == ItemKind.Activity) activities.filter { it.parentActivityId == item.id } else emptyList()
     val isCulto = item.kind == ItemKind.Activity && item.category == ActivityTypes.CULTO
-    // El Culto usa el repertorio vigente del ministerio; uno propio solo existe en datos antiguos.
-    val worshipSet = worshipSets.firstOrNull { it.activityId == item.id } ?: worshipSets.ministryRepertoire()
+    // En staging el repertorio no depende del culto: se muestra el vigente.
+    val worshipSet = worshipSets.ministryRepertoire()
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Color.White) {
         Column(
