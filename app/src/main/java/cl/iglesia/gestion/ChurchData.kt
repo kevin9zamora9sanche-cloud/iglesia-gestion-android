@@ -23,7 +23,7 @@ object ActivityTypes {
 
 enum class ItemKind { Activity, Task, Meeting }
 
-/** Clasificación de una actividad; se guarda en `activities.activity_type`. */
+/** Clasificación de una actividad; se traduce a `actividad.clasificacion` (ver StagingMappings). */
 enum class Classification(val databaseValue: String, val label: String) {
     Ministry("ministry", "Ministerio"),
     Project("general", "Proyecto"),
@@ -43,8 +43,6 @@ data class Member(
     val ledMinistryIds: List<String> = emptyList(),
     /** `usuario.debe_cambiar_contrasena`: tras ingresar debe elegir una contraseña propia. */
     val mustChangePassword: Boolean = false,
-    /** Solo visible para el Pastor (función admin_list_users). */
-    val lastSignIn: OffsetDateTime? = null,
 ) {
     val isPastor: Boolean get() = role == Roles.PASTOR
     val isMinistryLeader: Boolean get() = role == Roles.MINISTRY_LEADER
@@ -63,9 +61,10 @@ data class Ministry(
     val leaderIds: List<String>,
     val description: String,
     val active: Boolean = true,
+    /** `ministerio.es_alabanza`. */
+    val isWorship: Boolean = false,
 ) {
     val shortName: String get() = name.removePrefix("Ministerio de ").removePrefix("Ministerio ")
-    val isWorship: Boolean get() = name.contains("alabanza", ignoreCase = true)
 }
 
 /**
@@ -317,7 +316,6 @@ data class NewUserDraft(
     val fullName: String,
     val phone: String,
     val role: String,
-    val password: String,
     /** ministryId -> es líder */
     val memberships: Map<String, Boolean>,
 )

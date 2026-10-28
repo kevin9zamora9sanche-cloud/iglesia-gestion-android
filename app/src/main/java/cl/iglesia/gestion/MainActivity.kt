@@ -866,11 +866,6 @@ private fun ChurchApp() {
                             SupabaseBackend.sendPasswordReset(request.member.email)
                         }
                     },
-                    onSetPassword = { password ->
-                        perform("Contraseña temporal asignada", closeForm = false) {
-                            SupabaseBackend.setTemporaryPassword(request.member.id, password)
-                        }
-                    },
                 )
                 FormRequest.NewUser -> NewUserForm(
                     ministries = ministries,
@@ -879,8 +874,19 @@ private fun ChurchApp() {
                     onDismiss = { openForm = null },
                     onSubmit = { draft ->
                         perform("Cuenta creada para ${draft.email.trim()}") {
-                            SupabaseBackend.createUserAccount(draft)
-                            createdAccount = draft.email.trim() to draft.password
+                            val created = SupabaseBackend.createUserAccount(draft)
+                            // La contraseña temporal solo llega una vez: se muestra aunque falle el resto.
+                            createdAccount = created.email to created.password
+                            try {
+                                SupabaseBackend.applyNewUserDetails(created.id, draft)
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                android.util.Log.w("ChurchApp", "Detalles de la cuenta nueva sin guardar", error)
+                                throw PartialSaveException(
+                                    "La cuenta se creó, pero no se guardaron el rol, el teléfono o el liderazgo. Edítalos desde la cuenta.",
+                                )
+                            }
                         }
                     },
                 )

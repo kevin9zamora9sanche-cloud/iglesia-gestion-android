@@ -461,7 +461,7 @@ fun PersonnelScreen(
                         )
                         if (currentMember.isPastor && person.email.isNotBlank()) {
                             Text(
-                                person.email + (person.lastSignIn?.let { " · ${it.relativeLabel()}" } ?: " · sin accesos"),
+                                person.email,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextMuted,
                                 maxLines = 1,

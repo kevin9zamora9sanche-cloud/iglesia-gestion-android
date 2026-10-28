@@ -22,6 +22,7 @@ import io.github.jan.supabase.storage.storage
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -98,64 +99,55 @@ object SupabaseBackend {
     }
 
     suspend fun loadChurchSnapshot(currentMember: Member): ChurchSnapshot {
-        val ministryRows = client.from("ministries")
-            .select { order("name", Order.ASCENDING) }
-            .decodeList<SupabaseMinistry>()
-        val membershipRows = client.from("ministry_memberships")
+        val ministryRows = client.from("ministerio")
+            .select { order("nombre", Order.ASCENDING) }
+            .decodeList<MinisterioRow>()
+        val membershipRows = client.from("miembro_ministerio")
             .select()
-            .decodeList<SupabaseMembership>()
-        val memberRows = client.from("profiles")
-            .select { order("full_name", Order.ASCENDING) }
-            .decodeList<SupabaseProfile>()
-        val membershipsByUser = membershipRows.groupBy(SupabaseMembership::userId)
-        // Correo y último acceso solo para el Pastor; requiere la migración 20261023100000.
-        val accounts = if (currentMember.isPastor) {
-            try {
-                client.postgrest.rpc("admin_list_users").decodeList<SupabaseAccount>().associateBy(SupabaseAccount::id)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                android.util.Log.w("SupabaseBackend", "Directorio de cuentas no disponible", error)
-                emptyMap()
+            .decodeList<MiembroMinisterioRow>()
+        // RLS: el Pastor y los líderes de ministerio ven a todos; un líder normal solo su propia fila.
+        val memberRows = client.from("usuario")
+            .select { order("nombres", Order.ASCENDING) }
+            .decodeList<UsuarioRow>()
+        val membershipsByUser = membershipRows.groupBy(MiembroMinisterioRow::usuarioId)
+        val members = memberRows.map { row ->
+            val name = StagingMappings.joinFullName(row.nombres, row.apellidos).ifBlank {
+                if (row.id == currentMember.id) currentMember.name else "Usuario"
             }
-        } else {
-            emptyMap()
-        }
-        val members = memberRows.map { profile ->
-            val name = profile.fullName.ifBlank {
-                if (profile.id == currentMember.id) currentMember.name else "Usuario"
-            }
-            val role = profile.role.toRoleLabel()
-            val memberships = membershipsByUser[profile.id].orEmpty()
+            val role = StagingMappings.roleFromStaging(row.rol)
+            val memberships = membershipsByUser[row.id].orEmpty()
             Member(
-                id = profile.id,
+                id = row.id,
                 name = name,
                 role = role,
                 initials = name.initials(),
-                email = if (profile.id == currentMember.id) currentMember.email else accounts[profile.id]?.email.orEmpty(),
-                active = profile.isActive,
-                phone = profile.phone.orEmpty(),
-                ministryIds = memberships.map(SupabaseMembership::ministryId),
+                email = if (row.id == currentMember.id) currentMember.email else row.correo.orEmpty(),
+                active = StagingMappings.isActiveFromStaging(row.estado),
+                phone = row.telefono.orEmpty(),
+                ministryIds = memberships.map(MiembroMinisterioRow::ministerioId),
                 ledMinistryIds = memberships
-                    .filter { it.isLeader && role == Roles.MINISTRY_LEADER }
-                    .map(SupabaseMembership::ministryId),
-                lastSignIn = accounts[profile.id]?.lastSignInAt?.let(::parseTimestamp),
+                    .filter { it.esLider && role == Roles.MINISTRY_LEADER }
+                    .map(MiembroMinisterioRow::ministerioId),
             )
         }
         val allMinistries = ministryRows.mapIndexed { index, ministry ->
             Ministry(
                 id = ministry.id,
-                name = ministry.name,
-                icon = ministry.name.ministryIcon(),
+                name = ministry.nombre,
+                // Staging no guarda ícono ni color: se asignan por defecto en el cliente.
+                icon = ministry.nombre.ministryIcon(),
                 color = MINISTRY_COLORS[index % MINISTRY_COLORS.size],
                 leaderIds = membershipRows
-                    .filter { it.ministryId == ministry.id && it.isLeader }
-                    .map(SupabaseMembership::userId),
-                description = ministry.description,
-                active = ministry.isActive,
+                    .filter { it.ministerioId == ministry.id && it.esLider }
+                    .map(MiembroMinisterioRow::usuarioId),
+                description = ministry.descripcion.orEmpty(),
+                active = StagingMappings.isActiveFromStaging(ministry.estado),
+                isWorship = ministry.esAlabanza,
             )
         }
-        val (ministries, inactiveMinistries) = allMinistries.partition(Ministry::active)
+        // SELECT de ministerio es abierto: los inactivos solo se muestran al Pastor.
+        val (ministries, inactiveAll) = allMinistries.partition(Ministry::active)
+        val inactiveMinistries = if (currentMember.isPastor) inactiveAll else emptyList()
 
         val activities = client.from("activities")
             .select()
@@ -786,51 +778,46 @@ object SupabaseBackend {
 
     suspend fun createMinistry(currentMember: Member, draft: MinistryDraft) {
         require(currentMember.isPastor) { "Solo el Pastor/Administrador puede crear ministerios." }
-        client.from("ministries").insert(
-            MinistryInsert(
-                id = UUID.randomUUID().toString(),
-                name = draft.name.trim(),
-                description = draft.description.trim(),
-                createdBy = currentMember.id,
-            ),
+        client.from("ministerio").insert(
+            MinisterioInsert(nombre = draft.name.trim(), descripcion = draft.description.trim()),
         )
     }
 
     suspend fun updateMinistry(currentMember: Member, ministryId: String, draft: MinistryDraft) {
         require(currentMember.isPastor) { "Solo el Pastor/Administrador puede editar ministerios." }
-        client.from("ministries").update(MinistryUpdate(draft.name.trim(), draft.description.trim())) {
+        client.from("ministerio").update(MinisterioUpdate(draft.name.trim(), draft.description.trim())) {
             filter { eq("id", ministryId) }
         }
     }
 
-    /** Desactiva o reactiva un ministerio; sus integrantes y registros se conservan. */
+    /** Desactiva o reactiva un ministerio; staging no permite borrarlos. Integrantes y registros se conservan. */
     suspend fun setMinistryActive(currentMember: Member, ministryId: String, active: Boolean) {
         require(currentMember.isPastor) { "Solo el Pastor/Administrador puede activar o desactivar ministerios." }
-        client.from("ministries").update(MinistryActiveUpdate(active)) {
+        client.from("ministerio").update(MinisterioEstadoUpdate(StagingMappings.userStatusToStaging(active))) {
             filter { eq("id", ministryId) }
         }
     }
 
     suspend fun addMembership(ministryId: String, userId: String, isLeader: Boolean) {
-        client.from("ministry_memberships").insert(
-            SupabaseMembership(ministryId = ministryId, userId = userId, isLeader = isLeader),
+        client.from("miembro_ministerio").insert(
+            MiembroMinisterioRow(ministerioId = ministryId, usuarioId = userId, esLider = isLeader),
         )
     }
 
     suspend fun setMembershipLeader(ministryId: String, userId: String, isLeader: Boolean) {
-        client.from("ministry_memberships").update(MembershipLeaderUpdate(isLeader)) {
+        client.from("miembro_ministerio").update(MiembroLiderUpdate(isLeader)) {
             filter {
-                eq("ministry_id", ministryId)
-                eq("user_id", userId)
+                eq("ministerio_id", ministryId)
+                eq("usuario_id", userId)
             }
         }
     }
 
     suspend fun removeMembership(ministryId: String, userId: String) {
-        client.from("ministry_memberships").delete {
+        client.from("miembro_ministerio").delete {
             filter {
-                eq("ministry_id", ministryId)
-                eq("user_id", userId)
+                eq("ministerio_id", ministryId)
+                eq("usuario_id", userId)
             }
         }
     }
@@ -862,36 +849,56 @@ object SupabaseBackend {
         }
     }
 
-    suspend fun createUserAccount(draft: NewUserDraft): String {
-        val response = invokeAdminUsers(
-            buildJsonObject {
-                put("action", "create")
-                put("email", draft.email.trim())
-                put("full_name", draft.fullName.trim())
-                put("phone", draft.phone.trim())
-                put("role", draft.role.toDatabaseRole())
-                put("password", draft.password)
-                putJsonArray("memberships") {
-                    draft.memberships.forEach { (ministryId, isLeader) ->
-                        addJsonObject {
-                            put("ministry_id", ministryId)
-                            put("is_leader", isLeader)
-                        }
-                    }
-                }
-            },
-        )
-        return response["id"]?.jsonPrimitive?.content.orEmpty()
+    /**
+     * Crea la cuenta con la Edge Function `create-user` (solo Pastor activo). El servidor
+     * genera la contraseña temporal y la devuelve una única vez.
+     */
+    suspend fun createUserAccount(draft: NewUserDraft): CreatedAccount {
+        StagingAccounts.createUserProblem(draft.fullName, draft.email)?.let { throw UserFacingException(it) }
+        val (nombres, apellidos) = StagingMappings.splitFullName(draft.fullName)
+        val body = buildJsonObject {
+            put("nombres", nombres)
+            put("apellidos", apellidos)
+            put("correo", draft.email.trim())
+            putJsonArray("ministerioIds") { draft.memberships.keys.forEach { add(it) } }
+        }
+        val response = try {
+            client.functions.invoke("create-user", body)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: io.github.jan.supabase.exceptions.RestException) {
+            val raw = error.message.orEmpty() + " " + error.description
+            val serverMessage = Regex("\"error\"\\s*:\\s*\"([^\"]+)\"").find(raw)?.groupValues?.get(1)
+            throw UserFacingException(StagingAccounts.createUserErrorMessage(error.statusCode, serverMessage))
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "create-user no disponible", error)
+            throw UserFacingException("No se pudo contactar el servicio de cuentas. Revisa tu conexión e inténtalo de nuevo.")
+        }
+        val text = response.bodyAsText()
+        val json = runCatching { Json.parseToJsonElement(text) as JsonObject }.getOrNull() ?: JsonObject(emptyMap())
+        if (!response.status.isSuccess()) {
+            throw UserFacingException(
+                StagingAccounts.createUserErrorMessage(response.status.value, json["error"]?.jsonPrimitive?.content),
+            )
+        }
+        val id = json["id"]?.jsonPrimitive?.content
+        val password = json["password"]?.jsonPrimitive?.content
+        if (id.isNullOrBlank() || password.isNullOrBlank()) {
+            throw UserFacingException("La cuenta se creó, pero el servidor no devolvió la contraseña temporal. Pide ayuda al equipo técnico.")
+        }
+        return CreatedAccount(id, json["correo"]?.jsonPrimitive?.content ?: draft.email.trim(), password)
     }
 
-    suspend fun setTemporaryPassword(userId: String, password: String) {
-        invokeAdminUsers(
-            buildJsonObject {
-                put("action", "set_password")
-                put("user_id", userId)
-                put("password", password)
-            },
-        )
+    /** `create-user` solo fija nombre, correo y ministerios; rol, teléfono y liderazgo se aplican aquí. */
+    suspend fun applyNewUserDetails(userId: String, draft: NewUserDraft) {
+        val phone = draft.phone.trim()
+        val role = StagingMappings.roleToStaging(draft.role)
+        if (phone.isNotEmpty() || role != "LIDER_NORMAL") {
+            client.from("usuario").update(UsuarioDetalleUpdate(rol = role, telefono = phone.ifBlank { null })) {
+                filter { eq("id", userId) }
+            }
+        }
+        draft.memberships.filterValues { it }.keys.forEach { setMembershipLeader(it, userId, true) }
     }
 
     suspend fun sendPasswordReset(email: String) {
@@ -924,39 +931,25 @@ object SupabaseBackend {
         client.auth.updateUser { this.password = password }
     }
 
-    /** Llama a la Edge Function admin-users y traduce su error a un mensaje legible. */
-    private suspend fun invokeAdminUsers(body: JsonObject): JsonObject {
-        val response = try {
-            client.functions.invoke("admin-users", body)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            val serverMessage = Regex("\"error\"\\s*:\\s*\"([^\"]+)\"").find(error.message.orEmpty())?.groupValues?.get(1)
-            throw UserFacingException(
-                serverMessage ?: "No se pudo contactar el servicio de cuentas. Verifica que la función admin-users esté desplegada.",
-            )
-        }
-        val text = response.bodyAsText()
-        val json = runCatching { Json.parseToJsonElement(text) as JsonObject }.getOrNull() ?: JsonObject(emptyMap())
-        if (!response.status.isSuccess()) {
-            throw UserFacingException(json["error"]?.jsonPrimitive?.content ?: "El servicio de cuentas rechazó la solicitud.")
-        }
-        return json
-    }
-
-    /** Ajusta las membresías del perfil a las deseadas (ministryId -> es líder). */
+    /**
+     * Ajusta las membresías a las deseadas (ministryId -> es líder). `set_usuario_ministerios`
+     * agrega y quita membresías conservando `es_lider` de las existentes; el liderazgo se ajusta aparte.
+     */
     suspend fun syncMemberships(target: Member, ministries: List<Ministry>, desired: Map<String, Boolean>) {
         val currentLeader = ministries.filter { target.id in it.leaderIds }.mapTo(mutableSetOf(), Ministry::id)
-        val current = target.ministryIds.toSet()
+        client.postgrest.rpc(
+            function = "set_usuario_ministerios",
+            parameters = buildJsonObject {
+                put("p_usuario_id", target.id)
+                putJsonArray("p_ministerio_ids") { desired.keys.forEach { add(it) } }
+            },
+        )
         desired.forEach { (ministryId, isLeader) ->
-            when {
-                ministryId !in current -> addMembership(ministryId, target.id, isLeader)
-                (ministryId in currentLeader) != isLeader -> setMembershipLeader(ministryId, target.id, isLeader)
-            }
+            if ((ministryId in currentLeader) != isLeader) setMembershipLeader(ministryId, target.id, isLeader)
         }
-        (current - desired.keys).forEach { removeMembership(it, target.id) }
     }
 
+    /** Nunca envía `correo`: un trigger de staging lo protege. */
     suspend fun updateProfileAsPastor(
         target: Member,
         fullName: String,
@@ -964,22 +957,19 @@ object SupabaseBackend {
         role: String,
         active: Boolean,
     ) {
-        val databaseRole = when (role) {
-            Roles.PASTOR -> "pastor"
-            Roles.MINISTRY_LEADER -> "ministry_leader"
-            Roles.LEADER -> "leader"
-            else -> error("El rol seleccionado no es válido.")
+        require(role in Roles.all) { "El rol seleccionado no es válido." }
+        val (nombres, apellidos) = StagingMappings.splitFullName(fullName)
+        client.from("usuario").update(
+            UsuarioAdminUpdate(
+                nombres = nombres,
+                apellidos = apellidos,
+                telefono = phone.trim().ifBlank { null },
+                rol = StagingMappings.roleToStaging(role),
+                estado = StagingMappings.userStatusToStaging(active),
+            ),
+        ) {
+            filter { eq("id", target.id) }
         }
-        client.postgrest.rpc(
-            function = "admin_update_profile",
-            parameters = buildJsonObject {
-                put("target_profile_id", target.id)
-                put("target_full_name", fullName.trim())
-                put("target_phone", phone.trim())
-                put("target_role", databaseRole)
-                put("target_is_active", active)
-            },
-        )
     }
 }
 
@@ -1102,43 +1092,6 @@ private fun String.isPublicClientKey(): Boolean {
     }
 }
 
-private fun String.toDatabaseRole(): String = when (this) {
-    Roles.PASTOR -> "pastor"
-    Roles.MINISTRY_LEADER -> "ministry_leader"
-    else -> "leader"
-}
-
-private fun String.toRoleLabel(): String = when (this) {
-    "pastor" -> Roles.PASTOR
-    "ministry_leader" -> Roles.MINISTRY_LEADER
-    "leader" -> Roles.LEADER
-    else -> error("El rol de esta cuenta no está reconocido.")
-}
-
-@Serializable
-private data class SupabaseProfile(
-    val id: String,
-    @SerialName("full_name") val fullName: String,
-    val phone: String? = null,
-    val role: String,
-    @SerialName("is_active") val isActive: Boolean,
-)
-
-@Serializable
-private data class SupabaseMembership(
-    @SerialName("ministry_id") val ministryId: String,
-    @SerialName("user_id") val userId: String,
-    @SerialName("is_leader") val isLeader: Boolean,
-)
-
-@Serializable
-private data class SupabaseMinistry(
-    val id: String,
-    val name: String,
-    val description: String,
-    @SerialName("is_active") val isActive: Boolean,
-)
-
 @Serializable
 private data class SupabaseProject(
     val id: String,
@@ -1152,13 +1105,6 @@ private data class SupabaseProject(
     @SerialName("budget_executed") val budgetExecuted: Double? = null,
     val progress: Int = 0,
     val status: String,
-)
-
-@Serializable
-private data class SupabaseAccount(
-    val id: String,
-    val email: String? = null,
-    @SerialName("last_sign_in_at") val lastSignInAt: String? = null,
 )
 
 @Serializable
@@ -1375,25 +1321,6 @@ private data class WorshipSongInsert(
 )
 
 @Serializable
-private data class MinistryUpdate(
-    val name: String,
-    val description: String,
-)
-
-@Serializable
-private data class MinistryActiveUpdate(
-    @SerialName("is_active") val isActive: Boolean,
-)
-
-@Serializable
-private data class MinistryInsert(
-    val id: String,
-    val name: String,
-    val description: String,
-    @SerialName("created_by") val createdBy: String,
-)
-
-@Serializable
 private data class SupabaseMeetingRecord(
     val id: String,
     @SerialName("meeting_id") val meetingId: String? = null,
@@ -1473,11 +1400,6 @@ private data class RecordFileInsert(
 )
 
 @Serializable
-private data class MembershipLeaderUpdate(
-    @SerialName("is_leader") val isLeader: Boolean,
-)
-
-@Serializable
 private data class UsuarioRow(
     val id: String,
     val nombres: String = "",
@@ -1495,3 +1417,39 @@ private data class MiembroMinisterioRow(
     @SerialName("usuario_id") val usuarioId: String,
     @SerialName("es_lider") val esLider: Boolean = false,
 )
+
+@Serializable
+private data class MinisterioRow(
+    val id: String,
+    val nombre: String,
+    val descripcion: String? = null,
+    val estado: String? = null,
+    @SerialName("es_alabanza") val esAlabanza: Boolean = false,
+)
+
+@Serializable
+private data class MinisterioInsert(val nombre: String, val descripcion: String)
+
+@Serializable
+private data class MinisterioUpdate(val nombre: String, val descripcion: String)
+
+@Serializable
+private data class MinisterioEstadoUpdate(val estado: String)
+
+@Serializable
+private data class MiembroLiderUpdate(@SerialName("es_lider") val esLider: Boolean)
+
+@Serializable
+private data class UsuarioAdminUpdate(
+    val nombres: String,
+    val apellidos: String,
+    val telefono: String?,
+    val rol: String,
+    val estado: String,
+)
+
+@Serializable
+private data class UsuarioDetalleUpdate(val rol: String, val telefono: String?)
+
+/** Resultado de `create-user`; la contraseña temporal solo existe en esta respuesta. */
+class CreatedAccount(val id: String, val email: String, val password: String)

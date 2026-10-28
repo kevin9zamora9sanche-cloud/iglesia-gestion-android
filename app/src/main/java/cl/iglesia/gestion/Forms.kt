@@ -655,16 +655,6 @@ private fun PasswordInput(value: String, onValueChange: (String) -> Unit, label:
     )
 }
 
-/** Contraseña temporal legible (sin caracteres ambiguos) que cumple la política. */
-private fun generateTemporaryPassword(): String {
-    val letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
-    val digits = "23456789"
-    val random = java.security.SecureRandom()
-    val chars = MutableList(8) { letters[random.nextInt(letters.length)] } +
-        List(2) { digits[random.nextInt(digits.length)] }
-    return chars.shuffled(random).joinToString("")
-}
-
 @Composable
 fun NewUserForm(
     ministries: List<Ministry>,
@@ -677,23 +667,28 @@ fun NewUserForm(
     var name by rememberSaveable { mutableStateOf("") }
     var phone by rememberSaveable { mutableStateOf("") }
     var role by rememberSaveable { mutableStateOf(Roles.LEADER) }
-    var password by rememberSaveable { mutableStateOf(generateTemporaryPassword()) }
     var memberships by remember { mutableStateOf(mapOf<String, Boolean>()) }
     val emailValid = android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()
     FullScreenForm(
         title = "Nueva cuenta",
         confirmLabel = "Crear cuenta",
-        canConfirm = emailValid && name.isNotBlank() && passwordProblem(password) == null,
+        canConfirm = emailValid && StagingAccounts.createUserProblem(name, email) == null,
         submitting = submitting,
         error = error,
         onDismiss = onDismiss,
-        onConfirm = { onSubmit(NewUserDraft(email, name, phone, role, password, memberships)) },
+        onConfirm = { onSubmit(NewUserDraft(email, name, phone, role, memberships)) },
     ) {
         MessageBanner(
-            "La cuenta queda activa de inmediato. Entrega la contraseña temporal en persona y pide que la cambie en Más › Cambiar mi contraseña.",
+            "El sistema genera una contraseña temporal y la mostrará una sola vez al crear la cuenta. La persona deberá cambiarla al ingresar por primera vez.",
             BannerTone.Info,
         )
-        TextInput(name, { name = it }, "Nombre completo", required = true)
+        TextInput(
+            name,
+            { name = it },
+            "Nombres y apellidos",
+            required = true,
+            supportingText = "Los dos últimos apellidos van al final. Ej.: Ana María Pérez Soto.",
+        )
         TextInput(
             email,
             { email = it.trim() },
@@ -706,8 +701,6 @@ fun NewUserForm(
         TextInput(phone, { phone = it }, "Teléfono (opcional)", keyboardType = KeyboardType.Phone)
         FieldLabel("Rol", required = true)
         ChoiceChips(Roles.all, role, { it }, { role = it })
-        PasswordInput(password, { password = it }, "Contraseña temporal")
-        TextButton(onClick = { password = generateTemporaryPassword() }) { Text("Generar otra contraseña") }
         MembershipEditor(ministries, role, memberships) { memberships = it }
     }
 }
@@ -723,7 +716,7 @@ fun CreatedAccountDialog(email: String, password: String, onDismiss: () -> Unit)
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Anota estos datos y entrégalos en persona. La contraseña no se volverá a mostrar.",
+                    "Anota estos datos y entrégalos en persona. La contraseña temporal no se volverá a mostrar: si la pierdes, no podrás recuperarla.",
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Text("Correo", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
@@ -766,7 +759,6 @@ fun ProfileForm(
     onDismiss: () -> Unit,
     onSubmit: (ProfileDraft) -> Unit,
     onSendReset: () -> Unit,
-    onSetPassword: (String) -> Unit,
 ) {
     val initialMemberships = target.ministryIds.associateWith { id -> ministries.any { it.id == id && target.id in it.leaderIds } }
     var name by rememberSaveable { mutableStateOf(target.name) }
@@ -776,7 +768,6 @@ fun ProfileForm(
     var memberships by remember { mutableStateOf(initialMemberships) }
     var confirmDeactivate by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
-    var settingPassword by remember { mutableStateOf(false) }
     val draft = ProfileDraft(name, phone, role, active, memberships)
     FullScreenForm(
         title = "Administrar cuenta",
@@ -790,14 +781,7 @@ fun ProfileForm(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Avatar(target.initials, size = 52.dp)
             Spacer(Modifier.width(12.dp))
-            Column {
-                Text(target.email.ifBlank { "Correo no disponible" }, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-                Text(
-                    target.lastSignIn?.let { "Último acceso: ${it.relativeLabel()}" } ?: "Sin accesos registrados",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted,
-                )
-            }
+            Text(target.email.ifBlank { "Correo no disponible" }, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
         }
         TextInput(name, { name = it }, "Nombre completo", required = true)
         TextInput(phone, { phone = it }, "Teléfono (opcional)", keyboardType = KeyboardType.Phone)
@@ -820,11 +804,6 @@ fun ProfileForm(
             enabled = target.email.isNotBlank() && !submitting,
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
         ) { Text("Enviar correo para restablecer contraseña") }
-        OutlinedButton(
-            onClick = { settingPassword = true },
-            enabled = !submitting,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-        ) { Text("Asignar contraseña temporal") }
     }
     if (confirmDeactivate) {
         ConfirmDialog(
@@ -849,29 +828,6 @@ fun ProfileForm(
                 confirmReset = false
                 onSendReset()
             },
-        )
-    }
-    if (settingPassword) {
-        var temporary by remember { mutableStateOf(generateTemporaryPassword()) }
-        AlertDialog(
-            onDismissRequest = { settingPassword = false },
-            title = { Text("Contraseña temporal") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Reemplaza la contraseña de ${target.firstName}. Entrégala en persona.", style = MaterialTheme.typography.bodyMedium)
-                    PasswordInput(temporary, { temporary = it }, "Nueva contraseña")
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = passwordProblem(temporary) == null,
-                    onClick = {
-                        settingPassword = false
-                        onSetPassword(temporary)
-                    },
-                ) { Text("Asignar") }
-            },
-            dismissButton = { TextButton(onClick = { settingPassword = false }) { Text("Cancelar") } },
         )
     }
 }
