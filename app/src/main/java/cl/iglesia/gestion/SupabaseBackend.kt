@@ -57,7 +57,6 @@ object SupabaseBackend {
 
     private const val PROJECT_DESCRIPTION_MAX = 2000
     private const val MAX_RESPONSIBLE_LOOKUPS = 30
-    private const val RECORDS_BUCKET = "meeting-records"
     private const val SONGS_BUCKET = "worship-songs"
 
     suspend fun loadCurrentMember(): Member {
@@ -346,7 +345,7 @@ object SupabaseBackend {
                         defaultKey = it.defaultKey,
                         referenceUrl = it.referenceUrl,
                         files = songFiles[it.id].orEmpty().map { file ->
-                            RecordFile(file.id, file.fileName, file.contentType, file.sizeBytes, file.objectPath, SONGS_BUCKET)
+                            RecordFile(file.id, file.fileName, file.contentType, file.sizeBytes, file.objectPath)
                         },
                     )
                 }
@@ -390,16 +389,8 @@ object SupabaseBackend {
                 )
             }
 
-        // Los registros dependen de la migración 20261022110000; si aún no está
-        // aplicada, el resto de módulos sigue funcionando y la pantalla lo indica.
-        val meetingRecords = try {
-            loadMeetingRecords()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            android.util.Log.w("SupabaseBackend", "Registros de reuniones no disponibles", error)
-            null
-        }
+        val archivos = loadArchivos()
+        val meetingRecords = loadMeetingRecords(archivos)
 
         return ChurchSnapshot(
             members = members + hiddenMembers,
@@ -412,64 +403,89 @@ object SupabaseBackend {
             songs = songs,
             worshipSets = worshipSets,
             notifications = notifications,
-            meetingRecords = meetingRecords.orEmpty(),
-            recordsAvailable = meetingRecords != null,
+            meetingRecords = meetingRecords,
         )
     }
 
-    private suspend fun loadMeetingRecords(): List<MeetingRecord> {
-        val viewersByRecord = client.from("meeting_record_viewers")
-            .select()
-            .decodeList<SupabaseRecordViewer>()
-            .groupBy(SupabaseRecordViewer::recordId)
-        val filesByRecord = client.from("meeting_record_files")
+    private suspend fun loadArchivos(): List<ArchivoRow> =
+        client.from("archivo")
             .select { order("created_at", Order.ASCENDING) }
-            .decodeList<SupabaseRecordFile>()
-            .groupBy(SupabaseRecordFile::recordId)
-        return client.from("meeting_records")
-            .select { order("record_date", Order.DESCENDING) }
-            .decodeList<SupabaseMeetingRecord>()
+            .decodeList<ArchivoRow>()
+
+    private fun ArchivoRow.toRecordFile() =
+        RecordFile(id, nombre, StagingFiles.mimeFromType(tipo), tamanoBytes.toLong(), ruta)
+
+    private suspend fun loadMeetingRecords(archivos: List<ArchivoRow>): List<MeetingRecord> {
+        val zone = ZoneId.systemDefault()
+        val visibilityByRecord = client.from("visibilidad_reunion")
+            .select()
+            .decodeList<VisibilidadReunionRow>()
+            .groupBy(VisibilidadReunionRow::reunionId)
+        val filesByRecord = archivos.filter { it.reunionId != null }.groupBy { it.reunionId }
+        return client.from("reunion")
+            .select { order("fecha", Order.DESCENDING) }
+            .decodeList<ReunionRow>()
             .map { record ->
+                val visibility = StagingRecords.resolveVisibility(
+                    visibilityByRecord[record.id].orEmpty().map {
+                        StagingRecords.VisibilityRow(it.alcance, it.ministerioId, it.usuarioId)
+                    },
+                )
                 MeetingRecord(
                     id = record.id,
-                    meetingId = record.meetingId,
-                    title = record.title,
-                    date = LocalDate.parse(record.recordDate),
-                    summary = record.summary,
-                    visibility = RecordVisibility.entries.firstOrNull { it.databaseValue == record.visibility }
-                        ?: RecordVisibility.Selected,
-                    ministryId = record.ministryId,
-                    viewerIds = viewersByRecord[record.id].orEmpty().map(SupabaseRecordViewer::userId),
-                    files = filesByRecord[record.id].orEmpty().map {
-                        RecordFile(it.id, it.fileName, it.contentType, it.sizeBytes, it.objectPath)
-                    },
+                    meetingId = record.actividadId,
+                    title = record.nombre,
+                    date = parseTimestamp(record.fecha)?.let { StagingRecords.timestampToDate(it, zone) } ?: LocalDate.now(),
+                    summary = record.resumen.orEmpty(),
+                    visibility = visibility.visibility,
+                    ministryId = visibility.ministryId,
+                    viewerIds = visibility.viewerIds,
+                    files = filesByRecord[record.id].orEmpty().map { it.toRecordFile() },
                 )
             }
     }
 
     /**
-     * Crea el registro y sube sus archivos. Si un archivo falla, el registro queda
-     * guardado y se informa exactamente qué archivos no se adjuntaron.
+     * Crea la reunión, su visibilidad y sube sus archivos (solo Pastor, por RLS). Si un archivo
+     * falla, el registro queda guardado y se informa exactamente qué archivos no se adjuntaron.
      */
     suspend fun createMeetingRecord(currentMember: Member, draft: MeetingRecordDraft, files: List<PickedFile>) {
         require(currentMember.isPastor) { "Solo el Pastor/Administrador registra reuniones." }
         val recordId = UUID.randomUUID().toString()
-        client.from("meeting_records").insert(
-            MeetingRecordInsert(
-                id = recordId,
-                meetingId = draft.meetingId,
-                title = draft.title.trim(),
-                recordDate = draft.date.toString(),
-                summary = draft.summary.trim(),
-                visibility = draft.visibility.databaseValue,
-                ministryId = draft.ministryId.takeIf { draft.visibility == RecordVisibility.Ministry },
-                createdBy = currentMember.id,
-            ),
-        )
-        if (draft.visibility == RecordVisibility.Selected && draft.viewerIds.isNotEmpty()) {
-            client.from("meeting_record_viewers").insert(
-                draft.viewerIds.distinct().map { SupabaseRecordViewer(recordId, it) },
+        try {
+            client.from("reunion").insert(
+                ReunionInsert(
+                    id = recordId,
+                    actividadId = draft.meetingId,
+                    nombre = draft.title.trim(),
+                    fecha = StagingRecords.dateToTimestamp(draft.date, ZoneId.systemDefault()).toString(),
+                    resumen = draft.summary.trim().ifBlank { null },
+                    registradoPor = currentMember.id,
+                ),
             )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudo crear la reunión", error)
+            throw UserFacingException(
+                "No se pudo guardar el registro." +
+                    if (draft.meetingId != null) " Esa reunión podría tener ya un registro." else "",
+            )
+        }
+        val rows = StagingRecords.visibilityRows(draft.visibility, draft.ministryId, draft.viewerIds)
+        if (rows.isNotEmpty()) {
+            try {
+                client.from("visibilidad_reunion").insert(
+                    rows.map { VisibilidadReunionInsert(recordId, it.alcance, it.ministryId, it.userId) },
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                android.util.Log.w("SupabaseBackend", "No se pudo guardar la visibilidad", error)
+                // Sin filas de visibilidad solo el Pastor lo vería: se deshace para no dejarlo a medias.
+                runCatching { client.from("reunion").delete { filter { eq("id", recordId) } } }
+                throw UserFacingException("No se pudo guardar quién puede ver el registro, por lo que no se creó.")
+            }
         }
         val failed = files.filter { file ->
             try {
@@ -490,54 +506,89 @@ object SupabaseBackend {
         }
     }
 
-    suspend fun uploadRecordFile(currentMember: Member, recordId: String, file: PickedFile) {
-        val extension = ALLOWED_FILE_TYPES[file.contentType]
-            ?: throw UserFacingException("Solo se permiten archivos PDF, JPG o PNG.")
-        if (file.bytes.isEmpty() || file.bytes.size > MAX_FILE_BYTES) {
-            throw UserFacingException("Cada archivo debe pesar como máximo 5 MB.")
+    suspend fun uploadRecordFile(currentMember: Member, recordId: String, file: PickedFile) =
+        uploadArchivo(currentMember, "reunion", recordId, file)
+
+    suspend fun deleteRecordFile(file: RecordFile) = deleteArchivo(file)
+
+    suspend fun deleteMeetingRecord(record: MeetingRecord) {
+        val deleted = try {
+            // Las filas de archivo y visibilidad se eliminan en cascada.
+            client.from("reunion").delete {
+                select()
+                filter { eq("id", record.id) }
+            }.decodeList<IdRow>()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudo eliminar el registro", error)
+            throw UserFacingException("No se pudo eliminar el registro.")
         }
-        val fileId = UUID.randomUUID().toString()
-        val path = "$recordId/$fileId.$extension"
-        val bucket = client.storage.from(RECORDS_BUCKET)
-        bucket.upload(path, file.bytes, upsert = false)
+        if (deleted.isEmpty()) throw UserFacingException("Solo el Pastor/Administrador puede eliminar registros.")
+        removeStorageObjects(record.files.map(RecordFile::objectPath))
+    }
+
+    /**
+     * Sube un archivo al bucket `archivos` y registra su fila en `archivo`
+     * (`<owner_type>/<owner_id>/<archivo>`). Si la fila falla, el objeto se elimina.
+     */
+    private suspend fun uploadArchivo(currentMember: Member, ownerType: String, ownerId: String, file: PickedFile) {
+        val upload = StagingFiles.prepareUpload(
+            ownerType = ownerType,
+            ownerId = ownerId,
+            fileName = file.name,
+            mime = file.contentType,
+            sizeBytes = file.bytes.size.toLong(),
+            uniqueId = UUID.randomUUID().toString().take(8),
+        )
+        val bucket = client.storage.from(StagingFiles.BUCKET)
+        bucket.upload(upload.path, file.bytes, upsert = false)
         try {
-            client.from("meeting_record_files").insert(
-                RecordFileInsert(
-                    id = fileId,
-                    recordId = recordId,
-                    fileName = file.name,
-                    contentType = file.contentType,
-                    sizeBytes = file.bytes.size.toLong(),
-                    objectPath = path,
-                    uploadedBy = currentMember.id,
+            client.from("archivo").insert(
+                ArchivoInsert(
+                    nombre = upload.name,
+                    ruta = upload.path,
+                    tipo = upload.type,
+                    tamanoBytes = upload.sizeBytes,
+                    subidoPor = currentMember.id,
+                    cancionId = ownerId.takeIf { ownerType == "cancion" },
+                    reunionId = ownerId.takeIf { ownerType == "reunion" },
+                    actividadId = ownerId.takeIf { ownerType == "actividad" },
+                    ministerioId = ownerId.takeIf { ownerType == "ministerio" },
                 ),
             )
         } catch (error: Exception) {
             // Sin fila asociada el objeto quedaría huérfano: se elimina.
-            runCatching { bucket.delete(path) }
+            runCatching { bucket.delete(upload.path) }
             throw error
         }
     }
 
-    suspend fun deleteRecordFile(file: RecordFile) {
-        client.from("meeting_record_files").delete {
+    /** Elimina la fila de `archivo` y luego su objeto; RLS no devuelve filas si no hay permiso. */
+    private suspend fun deleteArchivo(file: RecordFile) {
+        val deleted = client.from("archivo").delete {
+            select()
             filter { eq("id", file.id) }
-        }
-        client.storage.from(RECORDS_BUCKET).delete(file.objectPath)
+        }.decodeList<IdRow>()
+        if (deleted.isEmpty()) throw UserFacingException("No tienes permiso para eliminar este archivo.")
+        removeStorageObjects(listOf(file.objectPath))
     }
 
-    suspend fun deleteMeetingRecord(record: MeetingRecord) {
-        if (record.files.isNotEmpty()) {
-            client.storage.from(RECORDS_BUCKET).delete(record.files.map(RecordFile::objectPath))
-        }
-        client.from("meeting_records").delete {
-            filter { eq("id", record.id) }
+    /** Un objeto huérfano no afecta a nadie (sin fila no se puede leer), así que un fallo solo se registra. */
+    private suspend fun removeStorageObjects(paths: List<String>) {
+        if (paths.isEmpty()) return
+        try {
+            client.storage.from(StagingFiles.BUCKET).delete(paths)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            android.util.Log.w("SupabaseBackend", "No se pudieron eliminar objetos de Storage", error)
         }
     }
 
-    /** Enlace temporal de descarga; Storage valida los permisos del registro o la canción. */
+    /** Enlace temporal de descarga; Storage valida los permisos del propietario del archivo. */
     suspend fun signedFileUrl(file: RecordFile): String {
-        val url = client.storage.from(file.bucket).createSignedUrl(file.objectPath, 5.minutes)
+        val url = client.storage.from(StagingFiles.BUCKET).createSignedUrl(file.objectPath, 5.minutes)
         return if (url.startsWith("http")) url else BuildConfig.SUPABASE_URL.trimEnd('/') + "/storage/v1/" + url.trimStart('/')
     }
 
@@ -1395,45 +1446,6 @@ private data class WorshipSongInsert(
 )
 
 @Serializable
-private data class SupabaseMeetingRecord(
-    val id: String,
-    @SerialName("meeting_id") val meetingId: String? = null,
-    val title: String,
-    @SerialName("record_date") val recordDate: String,
-    val summary: String = "",
-    val visibility: String,
-    @SerialName("ministry_id") val ministryId: String? = null,
-)
-
-@Serializable
-private data class MeetingRecordInsert(
-    val id: String,
-    @SerialName("meeting_id") val meetingId: String?,
-    val title: String,
-    @SerialName("record_date") val recordDate: String,
-    val summary: String,
-    val visibility: String,
-    @SerialName("ministry_id") val ministryId: String?,
-    @SerialName("created_by") val createdBy: String,
-)
-
-@Serializable
-private data class SupabaseRecordViewer(
-    @SerialName("record_id") val recordId: String,
-    @SerialName("user_id") val userId: String,
-)
-
-@Serializable
-private data class SupabaseRecordFile(
-    val id: String,
-    @SerialName("record_id") val recordId: String,
-    @SerialName("file_name") val fileName: String,
-    @SerialName("content_type") val contentType: String,
-    @SerialName("size_bytes") val sizeBytes: Long,
-    @SerialName("object_path") val objectPath: String,
-)
-
-@Serializable
 private data class WorshipSongUpdate(
     val title: String,
     val artist: String,
@@ -1463,14 +1475,62 @@ private data class SongFileInsert(
 )
 
 @Serializable
-private data class RecordFileInsert(
+private data class ArchivoRow(
     val id: String,
-    @SerialName("record_id") val recordId: String,
-    @SerialName("file_name") val fileName: String,
-    @SerialName("content_type") val contentType: String,
-    @SerialName("size_bytes") val sizeBytes: Long,
-    @SerialName("object_path") val objectPath: String,
-    @SerialName("uploaded_by") val uploadedBy: String,
+    val nombre: String,
+    val ruta: String,
+    val tipo: String,
+    @SerialName("tamano_bytes") val tamanoBytes: Int,
+    @SerialName("cancion_id") val cancionId: String? = null,
+    @SerialName("reunion_id") val reunionId: String? = null,
+)
+
+@Serializable
+private data class ArchivoInsert(
+    val nombre: String,
+    val ruta: String,
+    val tipo: String,
+    @SerialName("tamano_bytes") val tamanoBytes: Int,
+    @SerialName("subido_por") val subidoPor: String,
+    @SerialName("cancion_id") val cancionId: String? = null,
+    @SerialName("reunion_id") val reunionId: String? = null,
+    @SerialName("actividad_id") val actividadId: String? = null,
+    @SerialName("ministerio_id") val ministerioId: String? = null,
+)
+
+@Serializable
+private data class ReunionRow(
+    val id: String,
+    @SerialName("actividad_id") val actividadId: String? = null,
+    val nombre: String,
+    val fecha: String,
+    val resumen: String? = null,
+)
+
+@Serializable
+private data class ReunionInsert(
+    val id: String,
+    @SerialName("actividad_id") val actividadId: String?,
+    val nombre: String,
+    val fecha: String,
+    val resumen: String?,
+    @SerialName("registrado_por") val registradoPor: String,
+)
+
+@Serializable
+private data class VisibilidadReunionRow(
+    @SerialName("reunion_id") val reunionId: String,
+    val alcance: String,
+    @SerialName("ministerio_id") val ministerioId: String? = null,
+    @SerialName("usuario_id") val usuarioId: String? = null,
+)
+
+@Serializable
+private data class VisibilidadReunionInsert(
+    @SerialName("reunion_id") val reunionId: String,
+    val alcance: String,
+    @SerialName("ministerio_id") val ministerioId: String?,
+    @SerialName("usuario_id") val usuarioId: String?,
 )
 
 @Serializable

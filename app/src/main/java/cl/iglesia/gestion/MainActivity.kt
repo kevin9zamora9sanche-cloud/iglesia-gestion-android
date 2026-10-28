@@ -633,7 +633,6 @@ private fun ChurchApp() {
                                     MorePage.Records -> RecordsScreen(
                                         member = member,
                                         records = snapshot?.meetingRecords.orEmpty(),
-                                        available = snapshot?.recordsAvailable ?: true,
                                         ministries = ministries,
                                         members = members,
                                         submitting = submitting,
@@ -954,7 +953,10 @@ private fun ChurchApp() {
                     }
                 }
                 FormRequest.Record -> RecordForm(
-                    meetings = activities,
+                    // `reunion.actividad_id` es único: una convocatoria tiene a lo sumo un registro.
+                    meetings = activities.filter { activity ->
+                        snapshot?.meetingRecords.orEmpty().none { it.meetingId == activity.id }
+                    },
                     ministries = ministries,
                     members = members,
                     currentMember = member,

@@ -132,7 +132,6 @@ fun FileRow(name: String, contentType: String, size: Long, onOpen: (() -> Unit)?
 fun RecordsScreen(
     member: Member,
     records: List<MeetingRecord>,
-    available: Boolean,
     ministries: List<Ministry>,
     members: List<Member>,
     submitting: Boolean,
@@ -167,14 +166,7 @@ fun RecordsScreen(
                     "Resúmenes y archivos visibles solo para quienes tienen permiso.",
                 )
             }
-            if (!available) {
-                item {
-                    MessageBanner(
-                        "Los registros aún no están habilitados en el servidor. Pide aplicar la migración de registros de reuniones.",
-                        BannerTone.Error,
-                    )
-                }
-            } else if (records.isEmpty()) {
+            if (records.isEmpty()) {
                 item {
                     EmptyState(
                         "Sin registros",
@@ -272,7 +264,7 @@ fun RecordsScreen(
                 }
             }
         }
-        if (member.isPastor && available) {
+        if (member.isPastor) {
             ExtendedFloatingActionButton(
                 onClick = onCreate,
                 icon = { Icon(Icons.Outlined.Add, contentDescription = null) },

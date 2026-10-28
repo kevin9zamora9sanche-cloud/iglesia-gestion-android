@@ -183,12 +183,11 @@ data class RecordFile(
     val name: String,
     val contentType: String,
     val sizeBytes: Long,
+    /** `archivo.ruta` dentro del bucket `archivos`. */
     val objectPath: String,
-    /** Bucket de Storage donde vive el archivo: registros o canciones. */
-    val bucket: String = "meeting-records",
 )
 
-/** Registro posterior a una reunión; distinto de la convocatoria del calendario. */
+/** Fila de `reunion`: registro posterior a una reunión, distinto de la convocatoria del calendario. */
 data class MeetingRecord(
     val id: String,
     val meetingId: String?,
@@ -242,8 +241,6 @@ data class ChurchSnapshot(
     val worshipSets: List<WorshipSet>,
     val notifications: List<ChurchNotification>,
     val meetingRecords: List<MeetingRecord> = emptyList(),
-    /** Falso cuando la migración de registros aún no se aplica en Supabase. */
-    val recordsAvailable: Boolean = true,
 )
 
 data class ChurchNotification(
