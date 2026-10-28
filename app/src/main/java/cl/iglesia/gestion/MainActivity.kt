@@ -340,6 +340,37 @@ private fun ChurchApp() {
                 }
             },
         )
+        member.mustChangePassword -> {
+            var forcedSubmitting by remember { mutableStateOf(false) }
+            var forcedError by remember { mutableStateOf<String?>(null) }
+            ChangePasswordForm(
+                submitting = forcedSubmitting,
+                error = forcedError,
+                forced = true,
+                onDismiss = {
+                    coroutineScope.launch { runCatching { SupabaseBackend.client.auth.signOut() } }
+                },
+                onSubmit = { password ->
+                    coroutineScope.launch {
+                        forcedSubmitting = true
+                        forcedError = null
+                        try {
+                            SupabaseBackend.changeOwnPassword(password)
+                            // El trigger limpia el indicador; se recarga el perfil para confirmarlo.
+                            currentMember = SupabaseBackend.loadCurrentMember()
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            android.util.Log.w("ChurchApp", "Cambio de contraseña inicial rechazado", error)
+                            forcedError = (error as? UserFacingException)?.message
+                                ?: "No se pudo cambiar la contraseña. Revisa tu conexión e inténtalo de nuevo."
+                        } finally {
+                            forcedSubmitting = false
+                        }
+                    }
+                },
+            )
+        }
         consentedUserId != member.id && !hasCurrentConsent(context, member.id) -> ConsentScreen(
             onAccept = {
                 saveConsent(context, member.id)

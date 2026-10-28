@@ -882,12 +882,14 @@ fun ChangePasswordForm(
     error: String?,
     onDismiss: () -> Unit,
     onSubmit: (String) -> Unit,
+    /** Primer ingreso con contraseña temporal: salir cierra la sesión. */
+    forced: Boolean = false,
 ) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     val matches = password == confirmation
     FullScreenForm(
-        title = "Cambiar mi contraseña",
+        title = if (forced) "Elige tu contraseña" else "Cambiar mi contraseña",
         confirmLabel = "Cambiar contraseña",
         canConfirm = passwordProblem(password) == null && matches,
         submitting = submitting,
@@ -895,6 +897,12 @@ fun ChangePasswordForm(
         onDismiss = onDismiss,
         onConfirm = { onSubmit(password) },
     ) {
+        if (forced) {
+            MessageBanner(
+                "Ingresaste con una contraseña temporal. Elige una propia para continuar; si sales, se cerrará tu sesión.",
+                BannerTone.Info,
+            )
+        }
         PasswordInput(password, { password = it }, "Nueva contraseña")
         PasswordInput(confirmation, { confirmation = it }, "Repite la contraseña", showProblem = false)
         if (confirmation.isNotEmpty() && !matches) FieldError("Las contraseñas no coinciden.")

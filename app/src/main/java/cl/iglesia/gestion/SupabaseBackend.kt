@@ -59,41 +59,41 @@ object SupabaseBackend {
 
     suspend fun loadCurrentMember(): Member {
         val user = client.auth.retrieveUserForCurrentSession()
-        val profile = client.from("profiles")
+        val row = client.from("usuario")
             .select {
                 filter {
                     eq("id", user.id)
                 }
             }
-            .decodeSingle<SupabaseProfile>()
+            .decodeSingle<UsuarioRow>()
 
-        check(profile.isActive) {
-            "Esta cuenta está inactiva. Contacta al Pastor/Administrador."
-        }
+        // Con la cuenta inactiva RLS ya no devuelve nada, pero se valida por si cambia la política.
+        StagingAccounts.accessProblem(row.estado)?.let { throw UserFacingException(it) }
 
-        val memberships = client.from("ministry_memberships")
+        val memberships = client.from("miembro_ministerio")
             .select {
                 filter {
-                    eq("user_id", user.id)
+                    eq("usuario_id", user.id)
                 }
             }
-            .decodeList<SupabaseMembership>()
-        val role = profile.role.toRoleLabel()
-        val displayName = profile.fullName.ifBlank {
+            .decodeList<MiembroMinisterioRow>()
+        val role = StagingMappings.roleFromStaging(row.rol)
+        val displayName = StagingMappings.joinFullName(row.nombres, row.apellidos).ifBlank {
             user.email?.substringBefore("@")?.takeIf(String::isNotBlank) ?: "Usuario"
         }
         return Member(
-            id = profile.id,
+            id = row.id,
             name = displayName,
             role = role,
             initials = displayName.initials(),
-            email = user.email.orEmpty(),
-            active = profile.isActive,
-            phone = profile.phone.orEmpty(),
-            ministryIds = memberships.map(SupabaseMembership::ministryId),
+            email = user.email ?: row.correo.orEmpty(),
+            active = true,
+            phone = row.telefono.orEmpty(),
+            ministryIds = memberships.map(MiembroMinisterioRow::ministerioId),
             ledMinistryIds = memberships
-                .filter { it.isLeader && role == Roles.MINISTRY_LEADER }
-                .map(SupabaseMembership::ministryId),
+                .filter { it.esLider && role == Roles.MINISTRY_LEADER }
+                .map(MiembroMinisterioRow::ministerioId),
+            mustChangePassword = row.debeCambiarContrasena,
         )
     }
 
@@ -918,6 +918,7 @@ object SupabaseBackend {
         }
     }
 
+    /** Cambia la contraseña propia; el trigger de staging limpia `debe_cambiar_contrasena`. */
     suspend fun changeOwnPassword(password: String) {
         passwordProblem(password)?.let { throw UserFacingException(it) }
         client.auth.updateUser { this.password = password }
@@ -1474,4 +1475,23 @@ private data class RecordFileInsert(
 @Serializable
 private data class MembershipLeaderUpdate(
     @SerialName("is_leader") val isLeader: Boolean,
+)
+
+@Serializable
+private data class UsuarioRow(
+    val id: String,
+    val nombres: String = "",
+    val apellidos: String = "",
+    val correo: String? = null,
+    val telefono: String? = null,
+    val rol: String? = null,
+    val estado: String? = null,
+    @SerialName("debe_cambiar_contrasena") val debeCambiarContrasena: Boolean = false,
+)
+
+@Serializable
+private data class MiembroMinisterioRow(
+    @SerialName("ministerio_id") val ministerioId: String,
+    @SerialName("usuario_id") val usuarioId: String,
+    @SerialName("es_lider") val esLider: Boolean = false,
 )

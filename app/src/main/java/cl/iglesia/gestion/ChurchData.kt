@@ -41,6 +41,8 @@ data class Member(
     val phone: String = "",
     val ministryIds: List<String> = emptyList(),
     val ledMinistryIds: List<String> = emptyList(),
+    /** `usuario.debe_cambiar_contrasena`: tras ingresar debe elegir una contraseña propia. */
+    val mustChangePassword: Boolean = false,
     /** Solo visible para el Pastor (función admin_list_users). */
     val lastSignIn: OffsetDateTime? = null,
 ) {
