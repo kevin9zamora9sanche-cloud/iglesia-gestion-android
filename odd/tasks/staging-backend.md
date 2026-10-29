@@ -57,7 +57,7 @@ Production (`ezcppnxvpgzmxhzlvvla`) must never be used from this work.
 - Forecast: well above 400 authored changed lines (data layer rewrite).
 - Strategy: ask-on-risk; chain strategy `feature-branch-chain` (user choice):
   slice PRs target `feat/staging-backend`, one final PR to `main`.
-- Slices: (recorded as PRs are planned)
+- Slices: PR #1 `feat/staging-backend` -> `develop` (develop created from main bff1234 by user choice), all 14 commits f3e9998..3c274f7.
 
 ## Route log
 - T1+T2: delegated direct (writer trigger: 2+ non-trivial files).
