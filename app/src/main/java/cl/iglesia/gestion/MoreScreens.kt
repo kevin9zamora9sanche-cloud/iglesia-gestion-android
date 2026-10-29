@@ -347,8 +347,8 @@ fun WorshipScreen(
     deletingSong?.let { song ->
         ConfirmDialog(
             title = "¿Eliminar \"${song.title}\"?",
-            message = "Se quitará del catálogo" +
-                (if (song.files.isEmpty()) "" else " junto con sus ${song.files.size} archivo(s)") +
+            message = "Se quitará del catálogo y del repertorio" +
+                (if (song.files.isEmpty()) "" else ", junto con sus ${song.files.size} archivo(s)") +
                 ". Esta acción no se puede deshacer.",
             confirmLabel = "Eliminar",
             destructive = true,
@@ -461,7 +461,7 @@ fun PersonnelScreen(
                         )
                         if (currentMember.isPastor && person.email.isNotBlank()) {
                             Text(
-                                person.email + (person.lastSignIn?.let { " · ${it.relativeLabel()}" } ?: " · sin accesos"),
+                                person.email,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextMuted,
                                 maxLines = 1,
@@ -497,6 +497,7 @@ fun NotificationsScreen(
     onBack: () -> Unit,
     onMarkRead: (String) -> Unit,
     onMarkAllRead: () -> Unit,
+    onOpenItem: (String) -> Unit,
 ) {
     val unread = notifications.filter { !it.read }
     val read = notifications.filter { it.read }
@@ -523,24 +524,33 @@ fun NotificationsScreen(
         }
         if (unread.isNotEmpty()) {
             item { SectionHeader("Sin leer (${unread.size})") }
-            items(unread, key = { it.id }) { NotificationCard(it, submitting, onMarkRead) }
+            items(unread, key = { it.id }) { NotificationCard(it, submitting, onMarkRead, onOpenItem) }
         }
         if (read.isNotEmpty()) {
             item { SectionHeader("Anteriores") }
-            items(read, key = { it.id }) { NotificationCard(it, submitting, onMarkRead) }
+            items(read, key = { it.id }) { NotificationCard(it, submitting, onMarkRead, onOpenItem) }
         }
     }
 }
 
 @Composable
-private fun NotificationCard(notification: ChurchNotification, submitting: Boolean, onMarkRead: (String) -> Unit) {
-    val icon = when (notification.type) {
-        "assignment" -> Icons.Outlined.PersonAddAlt
-        "schedule" -> Icons.Outlined.Event
-        else -> Icons.Outlined.Campaign
+private fun NotificationCard(
+    notification: ChurchNotification,
+    submitting: Boolean,
+    onMarkRead: (String) -> Unit,
+    onOpenItem: (String) -> Unit,
+) {
+    val icon = when (notification.kind) {
+        NotificationKind.Assignment -> Icons.Outlined.PersonAddAlt
+        NotificationKind.Schedule -> Icons.Outlined.Event
+        NotificationKind.System -> Icons.Outlined.Campaign
     }
+    val itemId = notification.itemId
     AppCard(
-        onClick = if (notification.read || submitting) null else ({ onMarkRead(notification.id) }),
+        onClick = if (submitting || (notification.read && itemId == null)) null else ({
+            if (!notification.read) onMarkRead(notification.id)
+            itemId?.let(onOpenItem)
+        }),
         containerColor = if (notification.read) Color.White else GoldSurface,
         contentPadding = 14.dp,
     ) {
@@ -551,20 +561,24 @@ private fun NotificationCard(notification: ChurchNotification, submitting: Boole
                 Text(notification.message, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    listOfNotNull(notification.type.toNotificationLabel(), notification.createdAt?.relativeLabel()).joinToString(" · "),
+                    listOfNotNull(notification.kind.label(), notification.createdAt?.relativeLabel()).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                 )
-                if (!notification.read) {
-                    Text("Toca para marcar como leído", style = MaterialTheme.typography.bodySmall, color = GoldText)
+                if (!notification.read || itemId != null) {
+                    Text(
+                        if (itemId == null) "Toca para marcar como leído" else if (notification.read) "Toca para abrir" else "Toca para abrir y marcar como leído",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = GoldText,
+                    )
                 }
             }
         }
     }
 }
 
-private fun String.toNotificationLabel(): String = when (this) {
-    "assignment" -> "Asignación"
-    "schedule" -> "Agenda"
-    else -> "Sistema"
+private fun NotificationKind.label(): String = when (this) {
+    NotificationKind.Assignment -> "Asignación"
+    NotificationKind.Schedule -> "Agenda"
+    NotificationKind.System -> "Sistema"
 }

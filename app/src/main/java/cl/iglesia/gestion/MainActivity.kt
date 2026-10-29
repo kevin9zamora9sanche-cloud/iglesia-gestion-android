@@ -340,6 +340,37 @@ private fun ChurchApp() {
                 }
             },
         )
+        member.mustChangePassword -> {
+            var forcedSubmitting by remember { mutableStateOf(false) }
+            var forcedError by remember { mutableStateOf<String?>(null) }
+            ChangePasswordForm(
+                submitting = forcedSubmitting,
+                error = forcedError,
+                forced = true,
+                onDismiss = {
+                    coroutineScope.launch { runCatching { SupabaseBackend.client.auth.signOut() } }
+                },
+                onSubmit = { password ->
+                    coroutineScope.launch {
+                        forcedSubmitting = true
+                        forcedError = null
+                        try {
+                            SupabaseBackend.changeOwnPassword(password)
+                            // El trigger limpia el indicador; se recarga el perfil para confirmarlo.
+                            currentMember = SupabaseBackend.loadCurrentMember()
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            android.util.Log.w("ChurchApp", "Cambio de contraseña inicial rechazado", error)
+                            forcedError = (error as? UserFacingException)?.message
+                                ?: "No se pudo cambiar la contraseña. Revisa tu conexión e inténtalo de nuevo."
+                        } finally {
+                            forcedSubmitting = false
+                        }
+                    }
+                },
+            )
+        }
         consentedUserId != member.id && !hasCurrentConsent(context, member.id) -> ConsentScreen(
             onAccept = {
                 saveConsent(context, member.id)
@@ -595,14 +626,13 @@ private fun ChurchApp() {
                                         onEditSong = { song -> openFormRequest(FormRequest.EditSong(song.id)) },
                                         onDeleteSong = { song ->
                                             perform("\"${song.title}\" se eliminó del catálogo", closeForm = false) {
-                                                SupabaseBackend.deleteWorshipSong(song, snapshot?.worshipSets.orEmpty())
+                                                SupabaseBackend.deleteWorshipSong(song)
                                             }
                                         },
                                     )
                                     MorePage.Records -> RecordsScreen(
                                         member = member,
                                         records = snapshot?.meetingRecords.orEmpty(),
-                                        available = snapshot?.recordsAvailable ?: true,
                                         ministries = ministries,
                                         members = members,
                                         submitting = submitting,
@@ -644,6 +674,7 @@ private fun ChurchApp() {
                                                 SupabaseBackend.markAllNotificationsRead(member)
                                             }
                                         },
+                                        onOpenItem = { id -> detailItemId = id },
                                     )
                                 }
                             }
@@ -689,10 +720,14 @@ private fun ChurchApp() {
                             openFormRequest(FormRequest.EditAssignees(item.id))
                         },
                         onOpenFile = ::openFile,
+                        onAddComment = { text ->
+                            perform("Comentario agregado", closeForm = false) {
+                                SupabaseBackend.addTaskComment(member, item.id, text)
+                            }
+                        },
                         onChangeStatus = { status ->
                             perform("Estado actualizado", closeForm = false) {
                                 when {
-                                    item.isLegacyTask -> SupabaseBackend.updateLegacyTaskStatus(item.id, status)
                                     item.isTask -> SupabaseBackend.updateTaskStatus(item.id, status)
                                     else -> SupabaseBackend.updateActivityStatus(item.id, status)
                                 }
@@ -760,9 +795,7 @@ private fun ChurchApp() {
                     error = formError,
                     onDismiss = { openForm = null },
                     onSubmit = { draft, files ->
-                        permissions.worshipMinistryId?.let { ministryId ->
-                            perform("Canción agregada") { SupabaseBackend.createWorshipSong(member, ministryId, draft, files) }
-                        }
+                        perform("Canción agregada") { SupabaseBackend.createWorshipSong(member, draft, files) }
                     },
                 )
                 is FormRequest.EditSong -> {
@@ -835,11 +868,6 @@ private fun ChurchApp() {
                             SupabaseBackend.sendPasswordReset(request.member.email)
                         }
                     },
-                    onSetPassword = { password ->
-                        perform("Contraseña temporal asignada", closeForm = false) {
-                            SupabaseBackend.setTemporaryPassword(request.member.id, password)
-                        }
-                    },
                 )
                 FormRequest.NewUser -> NewUserForm(
                     ministries = ministries,
@@ -848,8 +876,19 @@ private fun ChurchApp() {
                     onDismiss = { openForm = null },
                     onSubmit = { draft ->
                         perform("Cuenta creada para ${draft.email.trim()}") {
-                            SupabaseBackend.createUserAccount(draft)
-                            createdAccount = draft.email.trim() to draft.password
+                            val created = SupabaseBackend.createUserAccount(draft)
+                            // La contraseña temporal solo llega una vez: se muestra aunque falle el resto.
+                            createdAccount = created.email to created.password
+                            try {
+                                SupabaseBackend.applyNewUserDetails(created.id, draft)
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                android.util.Log.w("ChurchApp", "Detalles de la cuenta nueva sin guardar", error)
+                                throw PartialSaveException(
+                                    "La cuenta se creó, pero no se guardaron el rol, el teléfono o el liderazgo. Edítalos desde la cuenta.",
+                                )
+                            }
                         }
                     },
                 )
@@ -913,7 +952,10 @@ private fun ChurchApp() {
                     }
                 }
                 FormRequest.Record -> RecordForm(
-                    meetings = activities,
+                    // `reunion.actividad_id` es único: una convocatoria tiene a lo sumo un registro.
+                    meetings = activities.filter { activity ->
+                        snapshot?.meetingRecords.orEmpty().none { it.meetingId == activity.id }
+                    },
                     ministries = ministries,
                     members = members,
                     currentMember = member,
@@ -925,20 +967,20 @@ private fun ChurchApp() {
                     },
                 )
                 FormRequest.Repertoire -> {
-                    val ministryId = permissions.worshipMinistryId
-                    if (ministryId == null) {
+                    if (!permissions.canManageWorship) {
                         LaunchedEffect(request) { openForm = null }
                     } else {
+                        val repertoire = snapshot?.worshipSets.orEmpty().ministryRepertoire()
                         RepertoireForm(
                             songs = snapshot?.songs.orEmpty(),
                             members = members,
-                            existing = snapshot?.worshipSets.orEmpty().ministryRepertoire(),
+                            existing = repertoire,
                             submitting = submitting,
                             error = formError,
                             onDismiss = { openForm = null },
                             onSubmit = { setSongs ->
-                                perform("Repertorio guardado y notificado") {
-                                    SupabaseBackend.saveMinistryRepertoire(ministryId, setSongs)
+                                perform("Repertorio guardado") {
+                                    SupabaseBackend.saveRepertoire(member, repertoire, setSongs)
                                 }
                             },
                         )

@@ -6,7 +6,7 @@ reuniones y administración de usuarios. Está hecha en **Kotlin + Jetpack
 Compose** y usa **Supabase** (autenticación, base de datos y archivos).
 
 > **¿Solo quieres ejecutar la app?** Sigue la [Guía rápida](#guía-rápida).
-> El backend ya está configurado: no necesitas tocar Supabase.
+> El backend ya está configurado (Supabase staging `dmdysvqailticvodbmyl`): no necesitas tocar Supabase.
 
 ---
 
@@ -145,56 +145,20 @@ botón en la app no es lo que protege los datos.
 | *SDK location not found* | Falta `local.properties` | Abre el proyecto con Android Studio para que lo cree, o crea `local.properties` con `sdk.dir=RUTA_A_TU_SDK` |
 | *Failed to find Build Tools 35* | Falta el SDK | Instálalo desde el SDK Manager ([paso 4](#4-instala-el-sdk-necesario)) |
 | El login dice *"Correo o contraseña incorrectos, o no hay conexión"* con datos correctos | El dispositivo no tiene internet, o el proyecto Supabase está **pausado** (pasa tras ~7 días sin uso en el plan gratuito) | Revisa la conexión; un administrador debe reactivarlo en el panel de Supabase (*Restore project*) |
-| Después de ingresar aparece *"No se pudieron cargar los datos"* | Faltan migraciones en la base de datos | Un administrador debe aplicarlas ([Backend](#backend-solo-administradores)) |
-| *"Registros… aún no están habilitados en el servidor"* | Falta la migración de registros de reuniones | Igual que el anterior |
-| Crear una cuenta falla con *"No se pudo contactar el servicio de cuentas"* | La función `admin-users` no está desplegada | Un administrador debe desplegarla ([Backend](#backend-solo-administradores)) |
+| Después de ingresar aparece *"No se pudieron cargar los datos"* | El esquema de staging cambió o no está disponible | Revisa el esquema en el repositorio CMAA ([Backend](#backend-solo-administradores)) |
+| Crear una cuenta falla con *"No se pudo contactar el servicio de cuentas"* | La función `create-user` no está desplegada en staging | Debe desplegarse desde el repositorio CMAA |
 | `adb: more than one device/emulator` | Hay varios dispositivos conectados | Usa `adb -s emulator-5554 …` (mira la lista con `adb devices`) |
 
 ---
 
 ## Backend (solo administradores)
 
-El backend es un proyecto Supabase ya enlazado en `supabase/config.toml`
-(`sbvgcnahuunjnczecmpt`). **Quien solo desarrolla la app no necesita esta
-sección.** Los detalles de cada migración están en
-[`supabase/README.md`](supabase/README.md).
-
-### Aplicar migraciones
-
-Requiere Node.js 20+ y acceso al proyecto en Supabase.
-
-```powershell
-npx.cmd --yes supabase login
-npx.cmd --yes supabase link --project-ref sbvgcnahuunjnczecmpt
-npx.cmd --yes supabase migration list --linked        # ver cuáles faltan
-npx.cmd --yes supabase db push --linked --dry-run     # revisar el plan
-npx.cmd --yes supabase db push --linked               # aplicar
-```
-
-Las migraciones están en `supabase/migrations/` y se aplican en orden de fecha.
-Están escritas para poder re-ejecutarse sobre un esquema existente.
-
-### Desplegar la función de administración de cuentas
-
-```powershell
-npx.cmd --yes supabase functions deploy admin-users --project-ref sbvgcnahuunjnczecmpt --use-api
-```
-
-Crear cuentas requiere la clave `service_role`, que **nunca** va en la app. La
-función `supabase/functions/admin-users` verifica que quien llama sea un
-Pastor activo y solo entonces usa esa clave en el servidor.
-
-### Designar el primer Pastor
-
-Si la base está vacía, crea la cuenta en *Authentication › Users* y ejecuta en
-el *SQL Editor*:
-
-```sql
-update public.profiles set role = 'pastor'
-where id = (select id from auth.users where email = 'correo@ejemplo.com');
-```
-
-Desde ese momento, el Pastor administra el resto de las cuentas desde la app.
+La app usa el proyecto Supabase de **staging** (`dmdysvqailticvodbmyl`). El
+esquema, las migraciones, las políticas RLS y las Edge Functions (por ejemplo
+`create-user`) pertenecen al repositorio web CMAA y se despliegan desde allí.
+**Este repositorio nunca aplica cambios de esquema.** Más detalle en
+[`supabase/README.md`](supabase/README.md). Quien solo desarrolla la app no
+necesita esta sección.
 
 ### Seguridad
 
@@ -223,10 +187,7 @@ Desde ese momento, el Pastor administra el resto de las cuentas desde la app.
 │       ├── SupabaseBackend.kt      # Único punto de acceso a Supabase
 │       └── Theme.kt                # Colores, tipografía y formas
 ├── supabase/
-│   ├── migrations/                 # Esquema y políticas RLS (SQL)
-│   ├── functions/admin-users/      # Edge Function de administración de cuentas
-│   ├── config.toml                 # Enlace con el proyecto Supabase
-│   └── README.md                   # Detalle de cada migración
+│   └── README.md                   # Aviso: el esquema vive en el repo CMAA
 ├── supabase.properties             # URL y clave pública de Supabase
 └── supabase.properties.example     # Plantilla para usar otro proyecto
 ```
@@ -246,9 +207,8 @@ sincronizar Gradle.
    git checkout -b feature/descripcion-corta
    ```
 2. Mantén la interfaz en Compose y todo acceso remoto en `SupabaseBackend.kt`.
-3. Si cambias la base de datos, agrega una **nueva** migración en
-   `supabase/migrations/` (no edites las ya aplicadas) y documéntala en
-   `supabase/README.md`.
+3. Si necesitas un cambio en la base de datos, propónlo en el repositorio
+   web CMAA (dueño del esquema); la app se adapta a staging.
 4. Antes de subir, compila (`.\gradlew.bat assembleDebug`) y prueba el flujo en
    un emulador o teléfono.
 5. Escribe los commits **en español** con el formato

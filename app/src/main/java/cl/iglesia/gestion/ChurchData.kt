@@ -23,7 +23,7 @@ object ActivityTypes {
 
 enum class ItemKind { Activity, Task, Meeting }
 
-/** Clasificación de una actividad; se guarda en `activities.activity_type`. */
+/** Clasificación de una actividad; se traduce a `actividad.clasificacion` (ver StagingMappings). */
 enum class Classification(val databaseValue: String, val label: String) {
     Ministry("ministry", "Ministerio"),
     Project("general", "Proyecto"),
@@ -41,8 +41,8 @@ data class Member(
     val phone: String = "",
     val ministryIds: List<String> = emptyList(),
     val ledMinistryIds: List<String> = emptyList(),
-    /** Solo visible para el Pastor (función admin_list_users). */
-    val lastSignIn: OffsetDateTime? = null,
+    /** `usuario.debe_cambiar_contrasena`: tras ingresar debe elegir una contraseña propia. */
+    val mustChangePassword: Boolean = false,
 ) {
     val isPastor: Boolean get() = role == Roles.PASTOR
     val isMinistryLeader: Boolean get() = role == Roles.MINISTRY_LEADER
@@ -61,9 +61,10 @@ data class Ministry(
     val leaderIds: List<String>,
     val description: String,
     val active: Boolean = true,
+    /** `ministerio.es_alabanza`. */
+    val isWorship: Boolean = false,
 ) {
     val shortName: String get() = name.removePrefix("Ministerio de ").removePrefix("Ministerio ")
-    val isWorship: Boolean get() = name.contains("alabanza", ignoreCase = true)
 }
 
 /**
@@ -91,13 +92,12 @@ data class ChurchActivity(
     val parentActivityId: String? = null,
     val parentActivityTitle: String? = null,
     val priority: String? = null,
-    val comments: String = "",
+    val taskComments: List<TaskComment> = emptyList(),
     val dueAt: OffsetDateTime? = null,
-    val isLegacyTask: Boolean = false,
 ) {
     val isTask: Boolean get() = kind == ItemKind.Task
     val isMeeting: Boolean get() = kind == ItemKind.Meeting
-    val isDone: Boolean get() = status == "completed" || status == "cancelled"
+    val isDone: Boolean get() = status == "completed"
 
     /** Etiqueta usada en los filtros de tipo de la agenda. */
     val typeLabel: String
@@ -116,6 +116,14 @@ data class ChurchActivity(
 
     fun isOverdue(today: LocalDate = LocalDate.now()): Boolean = !isDone && date.isBefore(today)
 }
+
+/** Fila de `comentario_tarea`; [authorId] es nulo si el autor ya no existe. */
+data class TaskComment(
+    val id: String,
+    val authorId: String?,
+    val text: String,
+    val createdAt: OffsetDateTime?,
+)
 
 data class ChurchProject(
     val id: String,
@@ -146,22 +154,22 @@ data class WorshipSetSong(
     val position: Int,
     val key: String,
     val leadId: String?,
+    /** `repertorio_cancion.enlace_version`; se conserva al guardar aunque la pantalla no lo edite. */
+    val versionUrl: String = "",
 )
 
 /**
- * Repertorio de Alabanza. El vigente es único y reutilizable (`activityId` nulo);
- * los atados a un Culto son repertorios antiguos que se conservan.
+ * Fila de `repertorio`. En staging no depende de un culto ni de un ministerio: la app usa
+ * el más reciente como repertorio vigente (ver [ministryRepertoire]).
  */
 data class WorshipSet(
     val id: String,
-    val activityId: String?,
-    val directorId: String?,
     val updatedAt: OffsetDateTime?,
     val songs: List<WorshipSetSong>,
 )
 
-/** Repertorio único y reutilizable del ministerio, si ya se creó. */
-fun List<WorshipSet>.ministryRepertoire(): WorshipSet? = firstOrNull { it.activityId == null }
+/** Repertorio vigente: la lista llega ordenada del más reciente al más antiguo. */
+fun List<WorshipSet>.ministryRepertoire(): WorshipSet? = firstOrNull()
 
 /** Visibilidad de un registro de reunión. */
 enum class RecordVisibility(val databaseValue: String, val label: String) {
@@ -175,12 +183,11 @@ data class RecordFile(
     val name: String,
     val contentType: String,
     val sizeBytes: Long,
+    /** `archivo.ruta` dentro del bucket `archivos`. */
     val objectPath: String,
-    /** Bucket de Storage donde vive el archivo: registros o canciones. */
-    val bucket: String = "meeting-records",
 )
 
-/** Registro posterior a una reunión; distinto de la convocatoria del calendario. */
+/** Fila de `reunion`: registro posterior a una reunión, distinto de la convocatoria del calendario. */
 data class MeetingRecord(
     val id: String,
     val meetingId: String?,
@@ -234,14 +241,14 @@ data class ChurchSnapshot(
     val worshipSets: List<WorshipSet>,
     val notifications: List<ChurchNotification>,
     val meetingRecords: List<MeetingRecord> = emptyList(),
-    /** Falso cuando la migración de registros aún no se aplica en Supabase. */
-    val recordsAvailable: Boolean = true,
 )
 
+/** Fila de `notificacion` del usuario; [itemId] es la actividad o tarea a la que apunta, si existe. */
 data class ChurchNotification(
     val id: String,
     val message: String,
-    val type: String,
+    val kind: NotificationKind,
+    val itemId: String?,
     val createdAt: OffsetDateTime?,
     val read: Boolean,
 )
@@ -315,7 +322,6 @@ data class NewUserDraft(
     val fullName: String,
     val phone: String,
     val role: String,
-    val password: String,
     /** ministryId -> es líder */
     val memberships: Map<String, Boolean>,
 )

@@ -486,6 +486,7 @@ fun ActivityDetailSheet(
     onEditAssignees: () -> Unit,
     onChangeStatus: (String) -> Unit,
     onOpenFile: (RecordFile) -> Unit = {},
+    onAddComment: (String) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val ministry = ministries.find { it.id == item.ministryId }
@@ -499,8 +500,8 @@ fun ActivityDetailSheet(
     }
     val childTasks = if (item.kind == ItemKind.Activity) activities.filter { it.parentActivityId == item.id } else emptyList()
     val isCulto = item.kind == ItemKind.Activity && item.category == ActivityTypes.CULTO
-    // El Culto usa el repertorio vigente del ministerio; uno propio solo existe en datos antiguos.
-    val worshipSet = worshipSets.firstOrNull { it.activityId == item.id } ?: worshipSets.ministryRepertoire()
+    // En staging el repertorio no depende del culto: se muestra el vigente.
+    val worshipSet = worshipSets.ministryRepertoire()
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Color.White) {
         Column(
@@ -522,7 +523,7 @@ fun ActivityDetailSheet(
                 DetailRow(
                     Icons.Outlined.Schedule,
                     when {
-                        !item.isTask -> "${item.date.longLabel()} · ${item.time}–${item.endTime}"
+                        !item.isTask -> "${item.date.longLabel()} · ${item.time}" + if (item.endTime.isNotBlank()) "–${item.endTime}" else ""
                         item.dueAt != null -> "Fecha límite: ${item.date.longLabel()} · ${item.time}"
                         else -> "Sin fecha límite (actividad: ${item.date.shortLabel()})"
                     },
@@ -545,14 +546,13 @@ fun ActivityDetailSheet(
             if (item.isTask) {
                 item.parentActivityTitle?.let { LabeledValue("Actividad", it) }
                 item.priority?.let { LabeledValue("Prioridad", it.toPriorityLabel()) }
-                if (item.comments.isNotBlank()) LabeledValue("Comentarios", item.comments)
             }
             if (isCulto) {
                 LabeledValue("Predicador", nameOf(item.preacherId) ?: "Sin asignar")
                 LabeledValue("Director de alabanza", nameOf(item.worshipLeaderId) ?: "Sin asignar")
             }
             val people = item.assigneeIds.mapNotNull { id -> members.find { it.id == id } }
-            val canEditAssignees = canManage && !item.isMeeting && !item.isLegacyTask
+            val canEditAssignees = canManage && !item.isMeeting
             if (item.assigneeIds.isNotEmpty() || canEditAssignees) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -589,6 +589,39 @@ fun ActivityDetailSheet(
                 }
             }
 
+            if (item.isTask) {
+                HorizontalDivider(color = CardBorder)
+                Text("Comentarios (${item.taskComments.size})", style = MaterialTheme.typography.titleSmall)
+                if (item.taskComments.isEmpty()) {
+                    Text("Aún no hay comentarios.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                }
+                item.taskComments.forEach { comment ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        val whenLabel = comment.createdAt
+                            ?.atZoneSameInstant(java.time.ZoneId.systemDefault())
+                            ?.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM HH:mm"))
+                        Text(
+                            listOfNotNull(nameOf(comment.authorId) ?: "Alguien", whenLabel).joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                        )
+                        Text(comment.text, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                var newComment by remember(item.id) { mutableStateOf("") }
+                TextInput(newComment, { newComment = it }, "Escribe un comentario", singleLine = false, minLines = 2)
+                OutlinedButton(
+                    onClick = {
+                        onAddComment(newComment)
+                        newComment = ""
+                    },
+                    enabled = !submitting && StagingTasks.commentOrNull(newComment) != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Comentar")
+                }
+            }
+
             if (item.isMeeting) {
                 RecordLinks(meetingRecords.filter { it.meetingId == item.id }, onOpenRecords)
             }
@@ -622,7 +655,7 @@ fun ActivityDetailSheet(
                 RepertoireList(worshipSet, songs, members, onOpenFile)
             }
 
-            if (item.kind == ItemKind.Activity && !item.isLegacyTask) {
+            if (item.kind == ItemKind.Activity) {
                 HorizontalDivider(color = CardBorder)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.TaskAlt, contentDescription = null, tint = BrandLight)

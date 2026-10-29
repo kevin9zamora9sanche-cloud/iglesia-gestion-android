@@ -103,35 +103,14 @@ identificadores de dispositivo ni diagnósticos: la app no los recopila.
 
 ## 4. Procesar una solicitud de eliminación
 
-No borres el usuario desde Authentication > Users. Varias tablas
-(`activities`, `tasks`, `meeting_records` y otras) referencian
-`profiles(id)` sin cascada, así que el borrado falla. En su lugar, anonimiza la
-cuenta.
+No borres el usuario desde Authentication > Users: las tablas del esquema
+referencian al usuario sin cascada y el borrado falla. En su lugar, anonimiza
+la cuenta.
 
 1. Verifica que la solicitud venga del correo de la cuenta.
-2. En el SQL Editor de Supabase, ejecuta lo siguiente con el ID de la
-   solicitud:
-
-   ```sql
-   begin;
-   -- Quita los datos personales; el contenido de la iglesia queda sin autor identificable.
-   update public.profiles
-     set full_name = 'Usuario eliminado', phone = null, is_active = false
-     where id = 'ID_DEL_USUARIO';
-   delete from public.ministry_memberships where user_id = 'ID_DEL_USUARIO';
-   delete from public.notifications where user_id = 'ID_DEL_USUARIO';
-   -- Impide el acceso y borra el correo real.
-   update auth.users
-     set email = 'eliminado-' || id || '@invalid.local',
-         encrypted_password = '',
-         phone = null,
-         raw_user_meta_data = '{}'::jsonb,
-         banned_until = 'infinity'
-     where id = 'ID_DEL_USUARIO';
-   delete from auth.identities where user_id = 'ID_DEL_USUARIO';
-   delete from auth.sessions where user_id = 'ID_DEL_USUARIO';
-   commit;
-   ```
+2. Ejecuta el procedimiento de anonimización definido en el repositorio web
+   CMAA, que es el dueño del esquema (tabla `usuario` y tablas relacionadas).
+   Este repositorio no mantiene SQL de esquema.
 
 3. Borra de Storage los archivos personales que la persona pida eliminar.
 4. Confirma la eliminación por correo dentro de 15 días hábiles (artículo 15 de la Ley 1581 de 2012).

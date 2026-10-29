@@ -166,14 +166,13 @@ fun ActivityForm(
     onSubmit: (ActivityDraft) -> Unit,
 ) {
     val availableMinistries = if (currentMember.isPastor) ministries else ministries.filter { it.id in currentMember.ledMinistryIds }
-    // La creación de actividades individuales sigue pendiente de validación: se
-    // mantiene restringida al Pastor, igual que la política RLS actual.
+    // Solo el Pastor crea actividades de proyecto o individuales (RLS de `actividad`).
     val classifications = if (currentMember.isPastor) {
-        listOf(Classification.Ministry, Classification.Project, Classification.General, Classification.Individual)
+        listOf(Classification.Ministry, Classification.Project, Classification.Individual)
     } else {
         listOf(Classification.Ministry)
     }
-    val openProjects = projects.filter { it.status != "completed" && it.status != "cancelled" }
+    val openProjects = projects.filter { it.status != "completed" }
     val types = ActivityTypes.all.filter { it != ActivityTypes.ENSAYO || permissions.canManageWorship }
 
     var title by rememberSaveable { mutableStateOf("") }
@@ -214,7 +213,8 @@ fun ActivityForm(
         Classification.Project -> openProjects.any { it.id == projectId }
         else -> currentMember.isPastor
     }
-    val cultoValid = !isCulto || (preacherId != null && worshipLeaderId != null)
+    // `detalle_culto` solo lo escribe el Pastor: para los demás roles esos campos no se muestran.
+    val cultoValid = !isCulto || !currentMember.isPastor || (preacherId != null && worshipLeaderId != null)
     val canSubmit = title.isNotBlank() && timesValid && targetValid && cultoValid && selectedAssignees.isNotEmpty()
 
     FullScreenForm(
@@ -281,7 +281,7 @@ fun ActivityForm(
                 ChoiceChips(openProjects, openProjects.firstOrNull { it.id == projectId }, { it.name }, { projectId = it.id })
             }
             Classification.Individual -> Text(
-                "Solo la verán el Pastor y las personas responsables.",
+                "Actividad sin ministerio ni proyecto.",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextMuted,
             )
@@ -315,7 +315,7 @@ fun ActivityForm(
         TextInput(location, { location = it }, "Lugar", placeholder = "Ej.: Santuario principal")
         TextInput(description, { description = it }, "Descripción", singleLine = false, minLines = 3)
 
-        if (isCulto) {
+        if (isCulto && currentMember.isPastor) {
             FieldLabel("Predicador", required = true)
             MemberPicker(activeMembers, setOfNotNull(preacherId), multiSelect = false, onChange = { preacherId = it.firstOrNull() }, emptyMessage = "No hay personas visibles.")
             FieldLabel("Director de alabanza", required = true)
@@ -409,7 +409,7 @@ fun TaskForm(
 ) {
     val today = LocalDate.now()
     val parents = activities
-        .filter { it.kind == ItemKind.Activity && !it.isLegacyTask && currentMember.canManageMinistry(it.ministryId) }
+        .filter { it.kind == ItemKind.Activity && currentMember.canManageMinistry(it.ministryId) }
         .filter { it.id == initialActivityId || !it.date.isBefore(today.minusDays(7)) }
         .sortedBy(ChurchActivity::date)
     var activityId by rememberSaveable { mutableStateOf(initialActivityId ?: parents.firstOrNull()?.id) }
@@ -477,7 +477,7 @@ fun TaskForm(
             TimeField("Hora límite", dueTime, { dueTime = it })
             Text("La tarea aparecerá en el calendario personal del responsable.", style = MaterialTheme.typography.bodySmall, color = TextMuted)
         }
-        TextInput(comments, { comments = it }, "Comentarios (opcional)", singleLine = false, minLines = 2)
+        TextInput(comments, { comments = it }, "Comentario inicial (opcional)", singleLine = false, minLines = 2)
     }
 }
 
@@ -655,16 +655,6 @@ private fun PasswordInput(value: String, onValueChange: (String) -> Unit, label:
     )
 }
 
-/** Contraseña temporal legible (sin caracteres ambiguos) que cumple la política. */
-private fun generateTemporaryPassword(): String {
-    val letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
-    val digits = "23456789"
-    val random = java.security.SecureRandom()
-    val chars = MutableList(8) { letters[random.nextInt(letters.length)] } +
-        List(2) { digits[random.nextInt(digits.length)] }
-    return chars.shuffled(random).joinToString("")
-}
-
 @Composable
 fun NewUserForm(
     ministries: List<Ministry>,
@@ -677,23 +667,28 @@ fun NewUserForm(
     var name by rememberSaveable { mutableStateOf("") }
     var phone by rememberSaveable { mutableStateOf("") }
     var role by rememberSaveable { mutableStateOf(Roles.LEADER) }
-    var password by rememberSaveable { mutableStateOf(generateTemporaryPassword()) }
     var memberships by remember { mutableStateOf(mapOf<String, Boolean>()) }
     val emailValid = android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()
     FullScreenForm(
         title = "Nueva cuenta",
         confirmLabel = "Crear cuenta",
-        canConfirm = emailValid && name.isNotBlank() && passwordProblem(password) == null,
+        canConfirm = emailValid && StagingAccounts.createUserProblem(name, email) == null,
         submitting = submitting,
         error = error,
         onDismiss = onDismiss,
-        onConfirm = { onSubmit(NewUserDraft(email, name, phone, role, password, memberships)) },
+        onConfirm = { onSubmit(NewUserDraft(email, name, phone, role, memberships)) },
     ) {
         MessageBanner(
-            "La cuenta queda activa de inmediato. Entrega la contraseña temporal en persona y pide que la cambie en Más › Cambiar mi contraseña.",
+            "El sistema genera una contraseña temporal y la mostrará una sola vez al crear la cuenta. La persona deberá cambiarla al ingresar por primera vez.",
             BannerTone.Info,
         )
-        TextInput(name, { name = it }, "Nombre completo", required = true)
+        TextInput(
+            name,
+            { name = it },
+            "Nombres y apellidos",
+            required = true,
+            supportingText = "Los dos últimos apellidos van al final. Ej.: Ana María Pérez Soto.",
+        )
         TextInput(
             email,
             { email = it.trim() },
@@ -706,8 +701,6 @@ fun NewUserForm(
         TextInput(phone, { phone = it }, "Teléfono (opcional)", keyboardType = KeyboardType.Phone)
         FieldLabel("Rol", required = true)
         ChoiceChips(Roles.all, role, { it }, { role = it })
-        PasswordInput(password, { password = it }, "Contraseña temporal")
-        TextButton(onClick = { password = generateTemporaryPassword() }) { Text("Generar otra contraseña") }
         MembershipEditor(ministries, role, memberships) { memberships = it }
     }
 }
@@ -723,7 +716,7 @@ fun CreatedAccountDialog(email: String, password: String, onDismiss: () -> Unit)
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Anota estos datos y entrégalos en persona. La contraseña no se volverá a mostrar.",
+                    "Anota estos datos y entrégalos en persona. La contraseña temporal no se volverá a mostrar: si la pierdes, no podrás recuperarla.",
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Text("Correo", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
@@ -766,7 +759,6 @@ fun ProfileForm(
     onDismiss: () -> Unit,
     onSubmit: (ProfileDraft) -> Unit,
     onSendReset: () -> Unit,
-    onSetPassword: (String) -> Unit,
 ) {
     val initialMemberships = target.ministryIds.associateWith { id -> ministries.any { it.id == id && target.id in it.leaderIds } }
     var name by rememberSaveable { mutableStateOf(target.name) }
@@ -776,7 +768,6 @@ fun ProfileForm(
     var memberships by remember { mutableStateOf(initialMemberships) }
     var confirmDeactivate by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
-    var settingPassword by remember { mutableStateOf(false) }
     val draft = ProfileDraft(name, phone, role, active, memberships)
     FullScreenForm(
         title = "Administrar cuenta",
@@ -790,14 +781,7 @@ fun ProfileForm(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Avatar(target.initials, size = 52.dp)
             Spacer(Modifier.width(12.dp))
-            Column {
-                Text(target.email.ifBlank { "Correo no disponible" }, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-                Text(
-                    target.lastSignIn?.let { "Último acceso: ${it.relativeLabel()}" } ?: "Sin accesos registrados",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted,
-                )
-            }
+            Text(target.email.ifBlank { "Correo no disponible" }, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
         }
         TextInput(name, { name = it }, "Nombre completo", required = true)
         TextInput(phone, { phone = it }, "Teléfono (opcional)", keyboardType = KeyboardType.Phone)
@@ -820,11 +804,6 @@ fun ProfileForm(
             enabled = target.email.isNotBlank() && !submitting,
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
         ) { Text("Enviar correo para restablecer contraseña") }
-        OutlinedButton(
-            onClick = { settingPassword = true },
-            enabled = !submitting,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-        ) { Text("Asignar contraseña temporal") }
     }
     if (confirmDeactivate) {
         ConfirmDialog(
@@ -851,29 +830,6 @@ fun ProfileForm(
             },
         )
     }
-    if (settingPassword) {
-        var temporary by remember { mutableStateOf(generateTemporaryPassword()) }
-        AlertDialog(
-            onDismissRequest = { settingPassword = false },
-            title = { Text("Contraseña temporal") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Reemplaza la contraseña de ${target.firstName}. Entrégala en persona.", style = MaterialTheme.typography.bodyMedium)
-                    PasswordInput(temporary, { temporary = it }, "Nueva contraseña")
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = passwordProblem(temporary) == null,
-                    onClick = {
-                        settingPassword = false
-                        onSetPassword(temporary)
-                    },
-                ) { Text("Asignar") }
-            },
-            dismissButton = { TextButton(onClick = { settingPassword = false }) { Text("Cancelar") } },
-        )
-    }
 }
 
 @Composable
@@ -882,12 +838,14 @@ fun ChangePasswordForm(
     error: String?,
     onDismiss: () -> Unit,
     onSubmit: (String) -> Unit,
+    /** Primer ingreso con contraseña temporal: salir cierra la sesión. */
+    forced: Boolean = false,
 ) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     val matches = password == confirmation
     FullScreenForm(
-        title = "Cambiar mi contraseña",
+        title = if (forced) "Elige tu contraseña" else "Cambiar mi contraseña",
         confirmLabel = "Cambiar contraseña",
         canConfirm = passwordProblem(password) == null && matches,
         submitting = submitting,
@@ -895,6 +853,12 @@ fun ChangePasswordForm(
         onDismiss = onDismiss,
         onConfirm = { onSubmit(password) },
     ) {
+        if (forced) {
+            MessageBanner(
+                "Ingresaste con una contraseña temporal. Elige una propia para continuar; si sales, se cerrará tu sesión.",
+                BannerTone.Info,
+            )
+        }
         PasswordInput(password, { password = it }, "Nueva contraseña")
         PasswordInput(confirmation, { confirmation = it }, "Repite la contraseña", showProblem = false)
         if (confirmation.isNotEmpty() && !matches) FieldError("Las contraseñas no coinciden.")
@@ -1018,7 +982,7 @@ fun RepertoireForm(
 
     FullScreenForm(
         title = "Repertorio de Alabanza",
-        confirmLabel = "Guardar y notificar",
+        confirmLabel = "Guardar",
         canConfirm = true,
         submitting = submitting,
         error = error,
@@ -1026,8 +990,7 @@ fun RepertoireForm(
         onConfirm = { onSubmit(entries.mapIndexed { index, entry -> entry.copy(position = index + 1) }) },
     ) {
         MessageBanner(
-            "Es el repertorio vigente del ministerio y se usa en todos los cultos y ensayos. " +
-                "Al guardar se enviará un único aviso a Alabanza, al Pastor y a predicadores y directores de los próximos cultos.",
+            "Es el repertorio vigente del ministerio y se usa en todos los cultos y ensayos.",
             BannerTone.Info,
         )
         if (entries.isEmpty()) {
